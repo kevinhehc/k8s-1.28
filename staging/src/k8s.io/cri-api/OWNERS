@@ -1,0 +1,15 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
+approvers:
+  - dims
+  - feiskyer
+  - sig-node-approvers
+  - sig-node-api-approvers
+  - api-approvers
+reviewers:
+  - sig-node-reviewers
+  - dims
+labels:
+  - sig/node
+emeritus_approvers:
+  - resouer

@@ -204,6 +204,7 @@ func (a *HorizontalController) Run(ctx context.Context, workers int) {
 		return
 	}
 
+	// 启动异步线程，每秒执行一次
 	for i := 0; i < workers; i++ {
 		go wait.UntilWithContext(ctx, a.worker, time.Second)
 	}
@@ -827,7 +828,7 @@ func (a *HorizontalController) reconcileAutoscaler(ctx context.Context, hpaShare
 	rescale := true
 	logger := klog.FromContext(ctx)
 
-	//副本数为0，不启动自动扩缩容
+	// 副本数为0，不启动自动扩缩容
 	if currentReplicas == 0 && minReplicas != 0 {
 		// Autoscaling is disabled for this resource
 		desiredReplicas = 0

@@ -35,6 +35,7 @@ import (
 	"k8s.io/metrics/pkg/client/external_metrics"
 )
 
+// 启动hpa的controller
 func startHPAController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
 	return startHPAControllerWithRESTClient(ctx, controllerContext)
 }

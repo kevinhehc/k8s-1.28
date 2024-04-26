@@ -165,11 +165,13 @@ func (c *ReplicaCalculator) GetRawResourceReplicas(ctx context.Context, currentR
 // (as a milli-value) for pods matching the given selector in the given namespace, and the
 // current replica count
 func (c *ReplicaCalculator) GetMetricReplicas(currentReplicas int32, targetUsage int64, metricName string, namespace string, selector labels.Selector, metricSelector labels.Selector) (replicaCount int32, usage int64, timestamp time.Time, err error) {
+	//获取pod中度量数据
 	metrics, timestamp, err := c.metricsClient.GetRawMetric(metricName, namespace, selector, metricSelector)
 	if err != nil {
 		return 0, 0, time.Time{}, fmt.Errorf("unable to get metric %s: %v", metricName, err)
 	}
 
+	//通过结合度量数据来计算希望扩缩容的数量是多少
 	replicaCount, usage, err = c.calcPlainMetricReplicas(metrics, currentReplicas, targetUsage, namespace, selector, v1.ResourceName(""))
 	return replicaCount, usage, timestamp, err
 }
@@ -186,7 +188,9 @@ func (c *ReplicaCalculator) calcPlainMetricReplicas(metrics metricsclient.PodMet
 		return 0, 0, fmt.Errorf("no pods returned by selector while calculating replica count")
 	}
 
+	// 将pod分类进行统计，得到ready的pod数量、ignored Pod集合、missing Pod集合
 	readyPodCount, unreadyPods, missingPods, ignoredPods := groupPods(podList, metrics, resource, c.cpuInitializationPeriod, c.delayOfInitialReadinessStatus)
+	// 在度量的数据里移除ignored Pods集合的数据
 	removeMetricsForPods(metrics, ignoredPods)
 	removeMetricsForPods(metrics, unreadyPods)
 
@@ -211,11 +215,13 @@ func (c *ReplicaCalculator) calcPlainMetricReplicas(metrics metricsclient.PodMet
 	if len(missingPods) > 0 {
 		if usageRatio < 1.0 {
 			// on a scale-down, treat missing pods as using exactly the target amount
+			// 如果是缩容，那么将missing pod使用率设置为目标资源使用率
 			for podName := range missingPods {
 				metrics[podName] = metricsclient.PodMetric{Value: targetUsage}
 			}
 		} else if usageRatio > 1.0 {
 			// on a scale-up, treat missing pods as using 0% of the resource request
+			// 如果是扩容，那么将missing pod使用率设置为0
 			for podName := range missingPods {
 				metrics[podName] = metricsclient.PodMetric{Value: 0}
 			}
@@ -224,12 +230,14 @@ func (c *ReplicaCalculator) calcPlainMetricReplicas(metrics metricsclient.PodMet
 
 	if scaleUpWithUnready {
 		// on a scale-up, treat unready pods as using 0% of the resource request
+		// 将unready pods使用率设置为0
 		for podName := range unreadyPods {
 			metrics[podName] = metricsclient.PodMetric{Value: 0}
 		}
 	}
 
 	// re-run the usage calculation with our new numbers
+	// 重新计算资源利用率
 	newUsageRatio, _ := metricsclient.GetMetricUsageRatio(metrics, targetUsage)
 
 	if math.Abs(1.0-newUsageRatio) <= c.tolerance || (usageRatio < 1.0 && newUsageRatio > 1.0) || (usageRatio > 1.0 && newUsageRatio < 1.0) {

@@ -311,7 +311,9 @@ func (a *HorizontalController) computeReplicasForMetrics(ctx context.Context, hp
 	var invalidMetricError error
 	var invalidMetricCondition autoscalingv2.HorizontalPodAutoscalerCondition
 
+	//这里的度量目标可以是一个列表，所以遍历之后取最大的需要扩缩容的数量
 	for i, metricSpec := range metricSpecs {
+		//根据type类型计算需要扩缩容的数量
 		replicaCountProposal, metricNameProposal, timestampProposal, condition, err := a.computeReplicasForMetric(ctx, hpa, metricSpec, specReplicas, statusReplicas, selector, &statuses[i])
 
 		if err != nil {
@@ -322,6 +324,7 @@ func (a *HorizontalController) computeReplicasForMetrics(ctx context.Context, hp
 			invalidMetricsCount++
 			continue
 		}
+		//记录最大的需要扩缩容的数量
 		if replicas == 0 || replicaCountProposal > replicas {
 			timestamp = timestampProposal
 			replicas = replicaCountProposal
@@ -741,6 +744,7 @@ func (a *HorizontalController) recordInitialRecommendation(currentReplicas int32
 	}
 }
 
+// 计算副本数
 func (a *HorizontalController) reconcileAutoscaler(ctx context.Context, hpaShared *autoscalingv2.HorizontalPodAutoscaler, key string) (retErr error) {
 	// actionLabel is used to report which actions this reconciliation has taken.
 	actionLabel := monitor.ActionLabelNone
@@ -823,19 +827,23 @@ func (a *HorizontalController) reconcileAutoscaler(ctx context.Context, hpaShare
 	rescale := true
 	logger := klog.FromContext(ctx)
 
+	//副本数为0，不启动自动扩缩容
 	if currentReplicas == 0 && minReplicas != 0 {
 		// Autoscaling is disabled for this resource
 		desiredReplicas = 0
 		rescale = false
 		setCondition(hpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "ScalingDisabled", "scaling is disabled since the replica count of the target is zero")
 	} else if currentReplicas > hpa.Spec.MaxReplicas {
+		//	如果当前副本数大于最大期望副本数，那么设置期望副本数为最大副本数
 		rescaleReason = "Current number of replicas above Spec.MaxReplicas"
 		desiredReplicas = hpa.Spec.MaxReplicas
 	} else if currentReplicas < minReplicas {
+		//	如果当前副本数小于最大期望副本数，那么设置期望副本数为最小副本数
 		rescaleReason = "Current number of replicas below Spec.MinReplicas"
 		desiredReplicas = minReplicas
 	} else {
 		var metricTimestamp time.Time
+		//计算需要扩缩容的数量
 		metricDesiredReplicas, metricName, metricStatuses, metricTimestamp, err = a.computeReplicasForMetrics(ctx, hpa, scale, hpa.Spec.Metrics)
 		// computeReplicasForMetrics may return both non-zero metricDesiredReplicas and an error.
 		// That means some metrics still work and HPA should perform scaling based on them.
@@ -869,6 +877,9 @@ func (a *HorizontalController) reconcileAutoscaler(ctx context.Context, hpaShare
 		if desiredReplicas < currentReplicas {
 			rescaleReason = "All metrics below target"
 		}
+		//从1.18开始支持behavior字段
+		//可以在扩缩容的时候指定一个稳定窗口，以防止缩放目标中的副本数量出现波动
+		//doc：https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#support-for-configurable-scaling-behavior
 		if hpa.Spec.Behavior == nil {
 			desiredReplicas = a.normalizeDesiredReplicas(hpa, key, currentReplicas, desiredReplicas, minReplicas)
 		} else {
@@ -987,6 +998,7 @@ type NormalizationArg struct {
 // 3. Apply the constraints period (i.e. add no more than 4 pods per minute)
 // 4. Apply the stabilization (i.e. add no more than 4 pods per minute, and pick the smallest recommendation during last 5 minutes)
 func (a *HorizontalController) normalizeDesiredReplicasWithBehaviors(hpa *autoscalingv2.HorizontalPodAutoscaler, key string, currentReplicas, prenormalizedDesiredReplicas, minReplicas int32) int32 {
+	// 如果StabilizationWindowSeconds设置为空，那么给一个默认的值,默认300s
 	a.maybeInitScaleDownStabilizationWindow(hpa)
 	normalizationArg := NormalizationArg{
 		Key:               key,
@@ -996,6 +1008,7 @@ func (a *HorizontalController) normalizeDesiredReplicasWithBehaviors(hpa *autosc
 		MaxReplicas:       hpa.Spec.MaxReplicas,
 		CurrentReplicas:   currentReplicas,
 		DesiredReplicas:   prenormalizedDesiredReplicas}
+	// 根据参数获取建议副本数
 	stabilizedRecommendation, reason, message := a.stabilizeRecommendationWithBehaviors(normalizationArg)
 	normalizationArg.DesiredReplicas = stabilizedRecommendation
 	if stabilizedRecommendation != prenormalizedDesiredReplicas {
@@ -1004,6 +1017,7 @@ func (a *HorizontalController) normalizeDesiredReplicasWithBehaviors(hpa *autosc
 	} else {
 		setCondition(hpa, autoscalingv2.AbleToScale, v1.ConditionTrue, "ReadyForNewScale", "recommended size matches current size")
 	}
+	// 根据scaleDown或scaleUp指定的参数做限制
 	desiredReplicas, reason, message := a.convertDesiredReplicasWithBehaviorRate(normalizationArg)
 	if desiredReplicas == stabilizedRecommendation {
 		setCondition(hpa, autoscalingv2.ScalingLimited, v1.ConditionFalse, reason, message)
@@ -1027,8 +1041,10 @@ func getReplicasChangePerPeriod(periodSeconds int32, scaleEvents []timestampedSc
 	period := time.Second * time.Duration(periodSeconds)
 	cutoff := time.Now().Add(-period)
 	var replicas int32
+	//遍历最近变更
 	for _, rec := range scaleEvents {
 		if rec.timestamp.After(cutoff) {
+			// 更新副本修改的数量, 会有正负，最终replicas就是最近变更的数量
 			replicas += rec.replicaChange
 		}
 	}
@@ -1147,6 +1163,7 @@ func (a *HorizontalController) stabilizeRecommendationWithBehaviors(args Normali
 
 	// Determine a human-friendly message.
 	var reason, message string
+	// 如果期望的副本数大于等于当前的副本数,则延迟时间=scaleUpBehaviro的稳定窗口时间
 	if args.DesiredReplicas >= args.CurrentReplicas {
 		reason = "ScaleUpStabilized"
 		message = "recent recommendations were lower than current one, applying the lowest recent recommendation"
@@ -1162,11 +1179,13 @@ func (a *HorizontalController) stabilizeRecommendationWithBehaviors(args Normali
 func (a *HorizontalController) convertDesiredReplicasWithBehaviorRate(args NormalizationArg) (int32, string, string) {
 	var possibleLimitingReason, possibleLimitingMessage string
 
+	//如果期望副本数大于当前副本数
 	if args.DesiredReplicas > args.CurrentReplicas {
 		a.scaleUpEventsLock.RLock()
 		defer a.scaleUpEventsLock.RUnlock()
 		a.scaleDownEventsLock.RLock()
 		defer a.scaleDownEventsLock.RUnlock()
+		//获取预期扩容的pod数量
 		scaleUpLimit := calculateScaleUpLimitWithScalingRules(args.CurrentReplicas, a.scaleUpEvents[args.Key], a.scaleDownEvents[args.Key], args.ScaleUpBehavior)
 
 		if scaleUpLimit < args.CurrentReplicas {
@@ -1186,6 +1205,7 @@ func (a *HorizontalController) convertDesiredReplicasWithBehaviorRate(args Norma
 			return maximumAllowedReplicas, possibleLimitingReason, possibleLimitingMessage
 		}
 	} else if args.DesiredReplicas < args.CurrentReplicas {
+		// 获取预期缩容的pod数量
 		a.scaleUpEventsLock.RLock()
 		defer a.scaleUpEventsLock.RUnlock()
 		a.scaleDownEventsLock.RLock()
@@ -1290,9 +1310,11 @@ func calculateScaleUpLimitWithScalingRules(currentReplicas int32, scaleUpEvents,
 		selectPolicyFn = max // Use the default policy otherwise to produce a highest possible change
 	}
 	for _, policy := range scalingRules.Policies {
+		//获取最近变更的副本数
 		replicasAddedInCurrentPeriod := getReplicasChangePerPeriod(policy.PeriodSeconds, scaleUpEvents)
 		replicasDeletedInCurrentPeriod := getReplicasChangePerPeriod(policy.PeriodSeconds, scaleDownEvents)
 		periodStartReplicas := currentReplicas - replicasAddedInCurrentPeriod + replicasDeletedInCurrentPeriod
+		//根据不同的policy类型，决定不同的预期值
 		if policy.Type == autoscalingv2.PodsScalingPolicy {
 			proposed = periodStartReplicas + policy.Value
 		} else if policy.Type == autoscalingv2.PercentScalingPolicy {

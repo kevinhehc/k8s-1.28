@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// https://github.com/kubernetes-sigs/metrics-server 可统计的指标
+// https://kubernetes.io/zh-cn/docs/tasks/run-application/horizontal-pod-autoscale/ 官方文档
 package podautoscaler
 
 import (

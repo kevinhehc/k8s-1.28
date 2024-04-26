@@ -232,16 +232,19 @@ type MetricSourceType string
 const (
 	// ObjectMetricSourceType is a metric describing a kubernetes object
 	// (for example, hits-per-second on an Ingress object).
+	// 这种度量专门用来描述k8s的内置对象
 	ObjectMetricSourceType MetricSourceType = "Object"
 	// PodsMetricSourceType is a metric describing each pod in the current scale
 	// target (for example, transactions-processed-per-second).  The values
 	// will be averaged together before being compared to the target value.
+	// 这种度量描述在目前被统计的每个pod平均期望值
 	PodsMetricSourceType MetricSourceType = "Pods"
 	// ResourceMetricSourceType is a resource metric known to Kubernetes, as
 	// specified in requests and limits, describing each pod in the current
 	// scale target (e.g. CPU or memory).  Such metrics are built in to
 	// Kubernetes, and have special scaling options on top of those available
 	// to normal per-pod metrics (the "pods" source).
+	// Resource描述的是每个pod中资源，如CPU或内存
 	ResourceMetricSourceType MetricSourceType = "Resource"
 	// ContainerResourceMetricSourceType is a resource metric known to Kubernetes, as
 	// specified in requests and limits, describing a single container in each pod in the current
@@ -254,6 +257,7 @@ const (
 	// coming from components running outside of cluster
 	// (for example length of queue in cloud messaging service, or
 	// QPS from loadbalancer running outside of cluster).
+	// External类型表示的是一种全局的度量，和k8s对象无关，主要依赖外部集群提供信息
 	ExternalMetricSourceType MetricSourceType = "External"
 )
 

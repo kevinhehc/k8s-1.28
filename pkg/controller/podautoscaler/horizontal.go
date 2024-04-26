@@ -448,8 +448,10 @@ func (a *HorizontalController) computeReplicasForMetric(ctx context.Context, hpa
 		a.monitor.ObserveMetricComputationResult(actionLabel, errorLabel, time.Since(start), spec.Type)
 	}()
 
+	//根据不同的类型来进行计量
 	switch spec.Type {
-	case autoscalingv2.ObjectMetricSourceType:
+
+	case autoscalingv2.ObjectMetricSourceType: //表示如果是一个k8s对象，如Ingress对象
 		metricSelector, err := metav1.LabelSelectorAsSelector(spec.Object.Metric.Selector)
 		if err != nil {
 			condition := a.getUnableComputeReplicaCountCondition(hpa, "FailedGetObjectMetric", err)
@@ -459,17 +461,19 @@ func (a *HorizontalController) computeReplicasForMetric(ctx context.Context, hpa
 		if err != nil {
 			return 0, "", time.Time{}, condition, fmt.Errorf("failed to get object metric value: %v", err)
 		}
-	case autoscalingv2.PodsMetricSourceType:
+
+	case autoscalingv2.PodsMetricSourceType: //	表示pod度量类型
 		metricSelector, err := metav1.LabelSelectorAsSelector(spec.Pods.Metric.Selector)
 		if err != nil {
 			condition := a.getUnableComputeReplicaCountCondition(hpa, "FailedGetPodsMetric", err)
 			return 0, "", time.Time{}, condition, fmt.Errorf("failed to get pods metric value: %v", err)
 		}
+		//仅支持AverageValue度量目标,计算需要扩缩容的数量
 		replicaCountProposal, timestampProposal, metricNameProposal, condition, err = a.computeStatusForPodsMetric(specReplicas, spec, hpa, selector, status, metricSelector)
 		if err != nil {
 			return 0, "", time.Time{}, condition, fmt.Errorf("failed to get pods metric value: %v", err)
 		}
-	case autoscalingv2.ResourceMetricSourceType:
+	case autoscalingv2.ResourceMetricSourceType: //	表示Resource度量类型
 		replicaCountProposal, timestampProposal, metricNameProposal, condition, err = a.computeStatusForResourceMetric(ctx, specReplicas, spec, hpa, selector, status)
 		if err != nil {
 			return 0, "", time.Time{}, condition, fmt.Errorf("failed to get %s resource metric value: %v", spec.Resource.Name, err)

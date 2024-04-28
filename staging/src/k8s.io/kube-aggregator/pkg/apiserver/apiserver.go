@@ -309,6 +309,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		})
 	}
 
+	// 维护 APIServices 的可用状态，包括其引用 Service 是否可用等；
 	availableController, err := statuscontrollers.NewAvailableConditionController(
 		informerFactory.Apiregistration().V1().APIServices(),
 		c.GenericConfig.SharedInformerFactory.Core().V1().Services(),
@@ -443,6 +444,7 @@ func (s *APIAggregator) PrepareRun() (preparedAPIAggregator, error) {
 		if err != nil {
 			return preparedAPIAggregator{}, err
 		}
+		// 将 APIServices 资源的变化同步至提供的 OpenAPI 文档；
 		s.openAPIAggregationController = openapicontroller.NewAggregationController(&specDownloader, openAPIAggregator)
 	}
 

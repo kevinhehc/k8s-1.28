@@ -44,6 +44,7 @@ type AutoAPIServiceRegistration interface {
 	RemoveAPIServiceToSync(name string)
 }
 
+// 负责将 CRD GroupVersions 自动注册到 APIServices 中；
 type crdRegistrationController struct {
 	crdLister crdlisters.CustomResourceDefinitionLister
 	crdSynced cache.InformerSynced

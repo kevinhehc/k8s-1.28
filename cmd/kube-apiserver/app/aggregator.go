@@ -141,6 +141,8 @@ func createAggregatorServer(aggregatorConfig aggregatorapiserver.CompletedConfig
 	if err != nil {
 		return nil, err
 	}
+
+	// 用于保持 API 中存在的一组特定的 APIServices；
 	autoRegistrationController := autoregister.NewAutoRegisterController(aggregatorServer.APIRegistrationInformers.Apiregistration().V1().APIServices(), apiRegistrationClient)
 	apiServices := apiServicesToRegister(delegateAPIServer, autoRegistrationController)
 	crdRegistrationController := crdregistration.NewCRDRegistrationController(

@@ -157,11 +157,13 @@ func Run(opts options.CompletedOptions, stopCh <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
+	// 构建服务调用链并判断是否启动非安全的 http server，http server 链中包含 apiserver 要启动的三个 server，以及为每个 server 注册对应资源的路由；
 	server, err := CreateServerChain(completed)
 	if err != nil {
 		return err
 	}
 
+	// 进行服务运行前的准备，该方法主要完成了健康检查、存活检查和OpenAPI路由的注册工作；
 	prepared, err := server.PrepareRun()
 	if err != nil {
 		return err
@@ -174,18 +176,21 @@ func Run(opts options.CompletedOptions, stopCh <-chan struct{}) error {
 // 构建服务调用链并判断是否启动非安全的 http server，http server 链中包含 apiserver 要启动的三个 server，以及为每个 server 注册对应资源的路由；
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.GenericConfig.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
+	// 创建 apiExtensionsServer 实例
 	apiExtensionsServer, err := config.ApiExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
 		return nil, err
 	}
 	crdAPIEnabled := config.ApiExtensions.GenericConfig.MergedResourceConfig.ResourceEnabled(apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions"))
 
+	// 初始化 kubeAPIServer；
 	kubeAPIServer, err := config.ControlPlane.New(apiExtensionsServer.GenericAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
 	// aggregator comes last in the chain
+	//  为 aggregatorServer 创建配置并调用 createAggregatorServer 初始化 aggregatorServer；
 	aggregatorServer, err := createAggregatorServer(config.Aggregator, kubeAPIServer.GenericAPIServer, apiExtensionsServer.Informers, crdAPIEnabled)
 	if err != nil {
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines

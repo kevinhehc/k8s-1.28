@@ -370,11 +370,13 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, fmt.Errorf("Master.New() called with empty config.KubeletClientConfig")
 	}
 
+	// 1、初始化 GenericAPIServer
 	s, err := c.GenericConfig.New("kube-apiserver", delegationTarget)
 	if err != nil {
 		return nil, err
 	}
 
+	// 2、注册 logs 相关的路由
 	if c.ExtraConfig.EnableLogsSupport {
 		routes.Logs{}.Install(s.Handler.GoRestfulContainer)
 	}
@@ -423,6 +425,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	// TODO: update to a version that caches success but will recheck on failure, unlike memcache discovery
 	discoveryClientForAdmissionRegistration := clientset.Discovery()
 
+	// 3、安装 LegacyAPI
 	legacyRESTStorageProvider, err := corerest.New(corerest.Config{
 		GenericConfig: corerest.GenericConfig{
 			StorageFactory:              c.ExtraConfig.StorageFactory,
@@ -456,6 +459,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	// with specific priorities.
 	// TODO: describe the priority all the way down in the RESTStorageProviders and plumb it back through the various discovery
 	// handlers that we have.
+	// 调用 legacyRESTStorageProvider.NewLegacyRESTStorage 为 LegacyAPI 中各个资源创建 RESTStorage，RESTStorage 的目的是将每种资源的访问路径及其后端存储的操作对应起来；
 	restStorageProviders := []RESTStorageProvider{
 		legacyRESTStorageProvider,
 		apiserverinternalrest.StorageProvider{},
@@ -480,6 +484,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		eventsrest.RESTStorageProvider{TTL: c.ExtraConfig.EventTTL},
 		resourcerest.RESTStorageProvider{},
 	}
+	// 4、安装 APIs
 	if err := m.InstallAPIs(c.ExtraConfig.APIResourceConfigSource, c.GenericConfig.RESTOptionsGetter, restStorageProviders...); err != nil {
 		return nil, err
 	}
@@ -505,6 +510,9 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		KubernetesServiceNodePort: c.ExtraConfig.KubernetesServiceNodePort,
 	}, clientset, c.ExtraConfig.VersionedInformers.Core().V1().Services())
 	// 初始化 bootstrap-controller
+	// bootstrap-controller 是 apiserver 中的一个 controller，主要功能是创建系统所需要的一些 namespace
+	//以及创建 kubernetes service 并定期触发对应的 sync 操作，
+	//apiserver 在启动后会通过调用 PostStartHook 来启动 bootstrap-controller；
 	m.GenericAPIServer.AddPostStartHookOrDie("bootstrap-controller", func(hookContext genericapiserver.PostStartHookContext) error {
 		kubernetesServiceCtrl.Start(hookContext.StopCh)
 		return nil

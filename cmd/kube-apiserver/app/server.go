@@ -177,6 +177,7 @@ func Run(opts options.CompletedOptions, stopCh <-chan struct{}) error {
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.ControlPlane.GenericConfig.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
 	// 创建 apiExtensionsServer 实例
+	// 主要处理 CustomResourceDefinition（CRD）和 CustomResource（CR）的 REST 请求，也是 Delegation 的最后一环，如果对应 CR 不能被处理的话则会返回 404
 	apiExtensionsServer, err := config.ApiExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
 		return nil, err
@@ -184,13 +185,15 @@ func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregat
 	crdAPIEnabled := config.ApiExtensions.GenericConfig.MergedResourceConfig.ResourceEnabled(apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions"))
 
 	// 初始化 kubeAPIServer；
+	// 负责对请求的一些通用处理，认证、鉴权等，以及处理各个内建资源的 REST 服务；
 	kubeAPIServer, err := config.ControlPlane.New(apiExtensionsServer.GenericAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
 	// aggregator comes last in the chain
-	//  为 aggregatorServer 创建配置并调用 createAggregatorServer 初始化 aggregatorServer；
+	// 为 aggregatorServer 创建配置并调用 createAggregatorServer 初始化 aggregatorServer；
+	// 暴露的功能类似于一个七层负载均衡，将来自用户的请求拦截转发给其他服务器，并且负责整个 APIServer 的 Discovery 功能；
 	aggregatorServer, err := createAggregatorServer(config.Aggregator, kubeAPIServer.GenericAPIServer, apiExtensionsServer.Informers, crdAPIEnabled)
 	if err != nil {
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
@@ -248,7 +251,8 @@ func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 			EnableLogsSupport:       opts.EnableLogsHandler,
 			ProxyTransport:          proxyTransport,
 
-			ServiceIPRange:          opts.PrimaryServiceClusterIPRange,
+			ServiceIPRange: opts.PrimaryServiceClusterIPRange,
+			// 获取 service ip range
 			APIServerServiceIP:      opts.APIServerServiceIP,
 			SecondaryServiceIPRange: opts.SecondaryServiceClusterIPRange,
 

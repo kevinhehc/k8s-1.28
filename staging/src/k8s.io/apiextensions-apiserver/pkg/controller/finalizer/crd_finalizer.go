@@ -56,6 +56,7 @@ func OverlappingBuiltInResources() map[schema.GroupResource]bool {
 }
 
 // CRDFinalizer is a controller that finalizes the CRD by deleting all the CRs associated with it.
+// 类似于 finalizes 的功能，与 CRs 的删除有关
 type CRDFinalizer struct {
 	crdClient      client.CustomResourceDefinitionsGetter
 	crClientGetter CRClientGetter

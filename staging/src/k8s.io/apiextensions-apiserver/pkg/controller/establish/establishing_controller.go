@@ -37,6 +37,7 @@ import (
 )
 
 // EstablishingController controls how and when CRD is established.
+// 检查 crd 是否处于正常状态，可在 crd .status.conditions 中查看；
 type EstablishingController struct {
 	crdClient client.CustomResourceDefinitionsGetter
 	crdLister listers.CustomResourceDefinitionLister

@@ -41,6 +41,7 @@ import (
 )
 
 // ConditionController is maintaining the NonStructuralSchema condition.
+// 检查 crd obj 结构是否正常，可在 crd .status.conditions 中查看；
 type ConditionController struct {
 	crdClient client.CustomResourceDefinitionsGetter
 

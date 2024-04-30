@@ -213,6 +213,7 @@ func CreateProxyTransport() *http.Transport {
 }
 
 // CreateKubeAPIServerConfig creates all the resources for running the API server, but runs none of them
+// 主要是调用 buildGenericConfig 创建 genericConfig 以及构建 master.Config 对象。
 func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 	*controlplane.Config,
 	aggregatorapiserver.ServiceResolver,
@@ -221,6 +222,7 @@ func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 ) {
 	proxyTransport := CreateProxyTransport()
 
+	// 1、构建 genericConfig
 	genericConfig, versionedInformers, storageFactory, err := controlplaneapiserver.BuildGenericConfig(
 		opts.CompletedOptions,
 		[]*runtime.Scheme{legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme},
@@ -230,6 +232,7 @@ func CreateKubeAPIServerConfig(opts options.CompletedOptions) (
 		return nil, nil, nil, err
 	}
 
+	// 2、初始化所支持的 capabilities
 	capabilities.Setup(opts.AllowPrivileged, opts.MaxConnectionBytesPerSec)
 
 	opts.Metrics.Apply()

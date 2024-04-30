@@ -193,6 +193,7 @@ func (cfg *Config) Complete() CompletedConfig {
 
 // NewWithDelegate returns a new instance of APIAggregator from the given config.
 func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.DelegationTarget) (*APIAggregator, error) {
+	// 1、初始化 genericServer
 	genericServer, err := c.GenericConfig.New("kube-aggregator", delegationTarget)
 	if err != nil {
 		return nil, err
@@ -251,6 +252,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		return nil, err
 	}
 
+	// 2、为 API 注册路由
 	apiGroupInfo := apiservicerest.NewRESTStorage(c.GenericConfig.MergedResourceConfig, c.GenericConfig.RESTOptionsGetter, resourceExpirationEvaluator.ShouldServeForVersion(1, 22))
 	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
 		return nil, err
@@ -264,6 +266,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		return nil, fmt.Errorf("API group/version %s must be enabled", v1.SchemeGroupVersion.String())
 	}
 
+	// 3、初始化 apiserviceRegistrationController、availableController
 	apisHandler := &apisHandler{
 		codecs:         aggregatorscheme.Codecs,
 		lister:         s.lister,
@@ -324,6 +327,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		return nil, err
 	}
 
+	// 4、添加 PostStartHook
 	s.GenericAPIServer.AddPostStartHookOrDie("start-kube-aggregator-informers", func(context genericapiserver.PostStartHookContext) error {
 		informerFactory.Start(context.StopCh)
 		c.GenericConfig.SharedInformerFactory.Start(context.StopCh)

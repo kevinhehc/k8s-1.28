@@ -4,7 +4,7 @@
 ## group和apiVersion的关系
 apiVersion 字段在 Kubernetes 资源定义中指定了所使用的 API 的版本。这个字段由两部分组成：group/version。例如，apps/v1 中，apps 是 API 组，而 v1 是该组内的版本号。如果资源属于 Kubernetes 的核心组（不属于任何具体的组），apiVersion 将只显示版本号，如 v1。
 ## 目录关系
-- 1、在pkg/apis下面，addKnownTypes可以知道有哪些类型
+- 1、在pkg/apis下面，addKnownTypes 可以知道有哪些类型
 - 2、staging/src/k8s.io/api/xx/xx/register.go下面也有具体的类型
 ## Core Group (无组前缀)
 

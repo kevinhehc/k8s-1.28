@@ -147,6 +147,9 @@ func New(c Config) (*legacyProvider, error) {
 	return p, nil
 }
 
+// NewRESTStorage 一个 API Group 下的资源都有其 REST 实现，k8s.io/kubernetes/pkg/registry下所有的 Group 都有一个rest目录，
+// 存储的就是对应资源的 RESTStorage。
+// 在NewLegacyRESTStorage方法中，通过NewREST或者NewStorage会生成各种资源对应的 Storage，此处以 pod 为例进行说明
 func (c *legacyProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, error) {
 	apiGroupInfo, err := c.GenericConfig.NewRESTStorage(apiResourceConfigSource, restOptionsGetter)
 	if err != nil {
@@ -187,6 +190,7 @@ func (c *legacyProvider) NewRESTStorage(apiResourceConfigSource serverstorage.AP
 		return genericapiserver.APIGroupInfo{}, err
 	}
 
+	// pod RESTStorage 的初始化
 	podStorage, err := podstore.NewStorage(
 		restOptionsGetter,
 		nodeStorage.KubeletConnectionInfo,

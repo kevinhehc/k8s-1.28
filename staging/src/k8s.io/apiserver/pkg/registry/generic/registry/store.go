@@ -1407,6 +1407,7 @@ func (e *Store) calculateTTL(obj runtime.Object, defaultTTL int64, update bool) 
 
 // CompleteWithOptions updates the store with the provided options and
 // defaults common fields.
+// 主要功能是为 store 中的配置设置一些默认的值以及根据提供的 options 更新 store，其中最主要的就是初始化 store 的后端存储实例
 func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 	if e.DefaultQualifiedResource.Empty() {
 		return fmt.Errorf("store %#v must have a non-empty qualified resource", e)
@@ -1472,12 +1473,14 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 		return err
 	}
 
+	// 1、调用 options.RESTOptions.GetRESTOptions
 	opts, err := options.RESTOptions.GetRESTOptions(e.DefaultQualifiedResource)
 	if err != nil {
 		return err
 	}
 
 	// ResourcePrefix must come from the underlying factory
+	// 2、设置 ResourcePrefix
 	prefix := opts.ResourcePrefix
 	if !strings.HasPrefix(prefix, "/") {
 		prefix = "/" + prefix
@@ -1520,6 +1523,7 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 		return e.KeyFunc(genericapirequest.NewContext(), accessor.GetName())
 	}
 
+	// 3、以下操作主要是将 opts 对象中的值赋值到 store 对象中
 	if e.DeleteCollectionWorkers == 0 {
 		e.DeleteCollectionWorkers = opts.DeleteCollectionWorkers
 	}

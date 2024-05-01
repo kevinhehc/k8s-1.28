@@ -91,6 +91,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 		TriggerFunc: map[string]storage.IndexerFunc{"spec.nodeName": registrypod.NodeNameTriggerFunc},
 		Indexers:    registrypod.Indexers(),
 	}
+	// 调用 store.CompleteWithOptions
 	if err := store.CompleteWithOptions(options); err != nil {
 		return PodStorage{}, err
 	}
@@ -102,6 +103,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 	ephemeralContainersStore.UpdateStrategy = registrypod.EphemeralContainersStrategy
 
 	bindingREST := &BindingREST{store: store}
+	// PodStorage 对象
 	return PodStorage{
 		Pod:                 &REST{store, proxyTransport},
 		Binding:             &BindingREST{store: store},

@@ -570,6 +570,7 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	// Start the audit backend before any request comes in. This means we must call Backend.Run
 	// before http server start serving. Otherwise the Backend.ProcessEvents call might block.
 	// AuditBackend.Run will stop as soon as all in-flight requests are drained.
+	// 判断是否要启动审计日志
 	if s.AuditBackend != nil {
 		if err := s.AuditBackend.Run(drainedCh.Signaled()); err != nil {
 			return fmt.Errorf("failed to run the audit backend: %v", err)
@@ -712,6 +713,7 @@ func (s preparedGenericAPIServer) NonBlockingRun(stopCh <-chan struct{}, shutdow
 	var listenerStoppedCh <-chan struct{}
 	if s.SecureServingInfo != nil && s.Handler != nil {
 		var err error
+		// 启动 https server
 		stoppedCh, listenerStoppedCh, err = s.SecureServingInfo.Serve(s.Handler, shutdownTimeout, internalStopCh)
 		if err != nil {
 			close(internalStopCh)
@@ -729,6 +731,7 @@ func (s preparedGenericAPIServer) NonBlockingRun(stopCh <-chan struct{}, shutdow
 
 	s.RunPostStartHooks(stopCh)
 
+	// 向 systemd 发送 ready 信号
 	if _, err := systemd.SdNotify(true, "READY=1\n"); err != nil {
 		klog.Errorf("Unable to send systemd daemon successful start message: %v\n", err)
 	}

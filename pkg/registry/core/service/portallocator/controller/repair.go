@@ -105,6 +105,7 @@ func (c *Repair) doRunOnce() error {
 	// important when we start apiserver and etcd at the same time.
 	var snapshot *api.RangeAllocation
 
+	// 1、首先从 etcd 中获取已使用 nodeport 的快照
 	err := wait.PollImmediate(time.Second, 10*time.Second, func() (bool, error) {
 		var err error
 		snapshot, err = c.alloc.Get()
@@ -114,10 +115,12 @@ func (c *Repair) doRunOnce() error {
 		return fmt.Errorf("unable to refresh the port allocations: %v", err)
 	}
 	// If not yet initialized.
+	// 2、检查 snapshot 是否初始化
 	if snapshot.Range == "" {
 		snapshot.Range = c.portRange.String()
 	}
 	// Create an allocator because it is easy to use.
+	// 3、获取已分配 nodePort 信息
 	stored, err := portallocator.NewFromSnapshot(snapshot)
 	if err != nil {
 		return fmt.Errorf("unable to rebuild allocator from snapshot: %v", err)
@@ -128,6 +131,7 @@ func (c *Repair) doRunOnce() error {
 	// the service collection. The caching layer keeps per-collection RVs,
 	// and this is proper, since in theory the collections could be hosted
 	// in separate etcd (or even non-etcd) instances.
+	// 4、获取 service list
 	list, err := c.serviceClient.Services(metav1.NamespaceAll).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("unable to refresh the port block: %v", err)
@@ -138,6 +142,7 @@ func (c *Repair) doRunOnce() error {
 		return fmt.Errorf("unable to create port allocator: %v", err)
 	}
 	// Check every Service's ports, and rebuild the state as we think it should be.
+	// 5、检查每个 Service ClusterIP 的 port，保证其处于正常状态
 	for i := range list.Items {
 		svc := &list.Items[i]
 		ports := collectServiceNodePorts(svc)
@@ -147,6 +152,8 @@ func (c *Repair) doRunOnce() error {
 
 		for _, port := range ports {
 			switch err := rebuilt.Allocate(port); err {
+
+			// 6、检查 port 是否泄漏
 			case nil:
 				if stored.Has(port) {
 					// remove it from the old set, so we can find leaks
@@ -157,14 +164,20 @@ func (c *Repair) doRunOnce() error {
 					runtime.HandleError(fmt.Errorf("the node port %d for service %s/%s is not allocated; repairing", port, svc.Name, svc.Namespace))
 				}
 				delete(c.leaks, port) // it is used, so it can't be leaked
+
+				// 7、port 重复分配
 			case portallocator.ErrAllocated:
 				// port is duplicate, reallocate
 				c.recorder.Eventf(svc, nil, corev1.EventTypeWarning, "PortAlreadyAllocated", "PortAllocation", "Port %d was assigned to multiple services; please recreate service", port)
 				runtime.HandleError(fmt.Errorf("the node port %d for service %s/%s was assigned to multiple services; please recreate", port, svc.Name, svc.Namespace))
+
+				// 8、port 超出分配范围
 			case err.(*portallocator.ErrNotInRange):
 				// port is out of range, reallocate
 				c.recorder.Eventf(svc, nil, corev1.EventTypeWarning, "PortOutOfRange", "PortAllocation", "Port %d is not within the port range %s; please recreate service", port, c.portRange)
 				runtime.HandleError(fmt.Errorf("the port %d for service %s/%s is not within the port range %s; please recreate", port, svc.Name, svc.Namespace, c.portRange))
+
+				// 9、port 已经分配完
 			case portallocator.ErrFull:
 				// somehow we are out of ports
 				c.recorder.Eventf(svc, nil, corev1.EventTypeWarning, "PortRangeFull", "PortAllocation", "Port range %s is full; you must widen the port range in order to create new services", c.portRange)
@@ -177,6 +190,7 @@ func (c *Repair) doRunOnce() error {
 	}
 
 	// Check for ports that are left in the old set.  They appear to have been leaked.
+	// 10、检查 port 是否泄漏
 	stored.ForEach(func(port int) {
 		count, found := c.leaks[port]
 		switch {
@@ -198,6 +212,7 @@ func (c *Repair) doRunOnce() error {
 	})
 
 	// Blast the rebuilt state into storage.
+	// 11、更新 snapshot
 	if err := rebuilt.Snapshot(snapshot); err != nil {
 		return fmt.Errorf("unable to snapshot the updated port allocations: %v", err)
 	}

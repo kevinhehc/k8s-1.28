@@ -180,6 +180,7 @@ func (r *leaseEndpointReconciler) ReconcileEndpoints(serviceName string, ip net.
 	// Refresh the TTL on our key, independently of whether any error or
 	// update conflict happens below. This makes sure that at least some of
 	// the masters will add our endpoint.
+	// 更新 lease 信息
 	if err := r.masterLeases.UpdateLease(ip.String()); err != nil {
 		return err
 	}
@@ -190,6 +191,7 @@ func (r *leaseEndpointReconciler) ReconcileEndpoints(serviceName string, ip net.
 // doReconcile can be called from ReconcileEndpoints() or RemoveEndpoints().
 // it is NOT SAFE to call it from multiple goroutines.
 func (r *leaseEndpointReconciler) doReconcile(serviceName string, endpointPorts []corev1.EndpointPort, reconcilePorts bool) error {
+	// 1、获取 master 的 endpoint
 	e, err := r.epAdapter.Get(corev1.NamespaceDefault, serviceName, metav1.GetOptions{})
 	shouldCreate := false
 	if err != nil {
@@ -212,6 +214,7 @@ func (r *leaseEndpointReconciler) doReconcile(serviceName string, endpointPorts 
 	}
 
 	// ... and the list of master IP keys from etcd
+	// 2、从 etcd 中获取所有的 master
 	masterIPs, err := r.masterLeases.ListLeases()
 	if err != nil {
 		return err
@@ -231,6 +234,7 @@ func (r *leaseEndpointReconciler) doReconcile(serviceName string, endpointPorts 
 	skipMirrorChanged := setSkipMirrorTrue(e)
 
 	// Next, we compare the current list of endpoints with the list of master IP keys
+	// 3、检查 endpoint 中 master 信息，如果与 etcd 中的不一致则进行更新
 	formatCorrect, ipCorrect, portsCorrect := checkEndpointSubsetFormatWithLease(e, masterIPs, endpointPorts, reconcilePorts)
 	if !skipMirrorChanged && formatCorrect && ipCorrect && portsCorrect {
 		return r.epAdapter.EnsureEndpointSliceFromEndpoints(corev1.NamespaceDefault, e)

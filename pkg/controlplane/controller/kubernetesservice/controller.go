@@ -90,6 +90,8 @@ func (c *Controller) Start(stopCh <-chan struct{}) {
 		return
 	}
 	// Reconcile during first run removing itself until server is ready.
+	// 1、首次启动时首先从 kubernetes endpoints 中移除自身的配置，
+	// 此时 kube-apiserver 可能处于非 ready 状态
 	endpointPorts := createEndpointPortSpec(c.PublicServicePort, "https")
 	if err := c.EndpointReconciler.RemoveEndpoints(kubernetesServiceName, c.PublicIP, endpointPorts); err == nil {
 		klog.Error("Found stale data, removed previous endpoints on kubernetes service, apiserver didn't exit successfully previously")

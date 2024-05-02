@@ -487,12 +487,27 @@ func startTTLController(ctx context.Context, controllerContext ControllerContext
 	return nil, true, nil
 }
 
+/*
+1、初始化 discoveryClient，discoveryClient 主要用来获取集群中的所有资源；
+2、调用 garbagecollector.GetDeletableResources 获取集群内所有可删除的资源对象，
+
+	支持 "delete", "list", "watch" 三种操作的 resource 称为 deletableResource；
+
+3、调用 garbagecollector.NewGarbageCollector 初始化 garbageCollector 对象；
+4、调用 garbageCollector.Run 启动 garbageCollector；
+5、调用 garbageCollector.Sync 监听集群中的 DeletableResources ，
+
+	当出现新的 DeletableResources 时同步到 monitors 中，确保监控集群中的所有资源；
+
+6、调用 garbagecollector.NewDebugHandler 注册 debug 接口，用来提供集群内所有对象的关联关系；
+*/
 func startGarbageCollectorController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
 	if !controllerContext.ComponentConfig.GarbageCollectorController.EnableGarbageCollector {
 		return nil, false, nil
 	}
 
 	gcClientset := controllerContext.ClientBuilder.ClientOrDie("generic-garbage-collector")
+	// 1、初始化 discoveryClient
 	discoveryClient := controllerContext.ClientBuilder.DiscoveryClientOrDie("generic-garbage-collector")
 
 	config := controllerContext.ClientBuilder.ConfigOrDie("generic-garbage-collector")
@@ -508,6 +523,7 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 	for _, r := range controllerContext.ComponentConfig.GarbageCollectorController.GCIgnoredResources {
 		ignoredResources[schema.GroupResource{Group: r.Group, Resource: r.Resource}] = struct{}{}
 	}
+	// 3、初始化 garbageCollector 对象
 	garbageCollector, err := garbagecollector.NewGarbageCollector(
 		gcClientset,
 		metadataClient,
@@ -522,6 +538,7 @@ func startGarbageCollectorController(ctx context.Context, controllerContext Cont
 
 	// Start the garbage collector.
 	workers := int(controllerContext.ComponentConfig.GarbageCollectorController.ConcurrentGCSyncs)
+	// 4、启动 garbage collector
 	go garbageCollector.Run(ctx, workers)
 
 	// Periodically refresh the RESTMapper with new discovery information and sync

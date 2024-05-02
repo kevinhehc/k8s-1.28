@@ -78,6 +78,11 @@ type event struct {
 // GraphBuilder processes events supplied by the informers, updates uidToNode,
 // a graph that caches the dependencies as we know, and enqueues
 // items to the attemptToDelete and attemptToOrphan.
+/*
+1、监控集群中所有的可删除资源；
+2、基于 informers 中的资源在 uidToNode 数据结构中维护着所有对象的依赖关系；
+3、处理 graphChanges 中的事件并放到 attemptToDelete 和 attemptToOrphan 两个队列中；
+*/
 type GraphBuilder struct {
 	restMapper meta.RESTMapper
 
@@ -87,6 +92,8 @@ type GraphBuilder struct {
 	monitorLock sync.RWMutex
 	// informersStarted is closed after after all of the controllers have been initialized and are running.
 	// After that it is safe to start them here, before that it is not.
+	// 当 kube-controller-manager 中所有的 controllers 都启动后，informersStarted 会被 close 掉
+	// informersStarted 会被 close 掉的调用程序在 kube-controller-manager 的启动流程中
 	informersStarted <-chan struct{}
 
 	// stopCh drives shutdown. When a receive from it unblocks, monitors will shut down.
@@ -95,6 +102,7 @@ type GraphBuilder struct {
 
 	// running tracks whether Run() has been called.
 	// it is protected by monitorLock.
+	// 当调用 GraphBuilder 的 run 方法时，running 会被设置为 true
 	running bool
 
 	eventRecorder record.EventRecorder
@@ -102,17 +110,29 @@ type GraphBuilder struct {
 	metadataClient metadata.Interface
 	// monitors are the producer of the graphChanges queue, graphBuilder alters
 	// the in-memory graph according to the changes.
+	// informers 监听到的事件会放在 graphChanges 中
 	graphChanges workqueue.RateLimitingInterface
 	// uidToNode doesn't require a lock to protect, because only the
 	// single-threaded GraphBuilder.processGraphChanges() reads/writes it.
+	// 维护所有对象的依赖关系
+	/*
+		此处有必要先说明一下 uidToNode 的功能，uidToNode 数据结构中维护着所有对象的依赖关系，
+		此处的依赖关系是指比如当创建一个 deployment 时会创建对应的 rs 以及 pod，pod 的 owner 就是 rs，
+		rs 的 owner 是 deployment，rs 的 dependents 是其关联的所有 pod，deployment 的 dependents 是其关联的所有 rs。
+
+		uidToNode 中的 node 不是指 k8s 中的 node 节点，而是将 graphChanges 中的 event 转换为 node 对象，
+		k8s 中所有 object 之间的级联关系是通过 node 的概念来维护的，garbageCollector 在后续的处理中会直接使用 node 对象
+	*/
 	uidToNode *concurrentUIDToNode
 	// GraphBuilder is the producer of attemptToDelete and attemptToOrphan, GC is the consumer.
+	// GarbageCollector 作为消费者要处理 attemptToDelete 和 attemptToOrphan 两个队列中的事件
 	attemptToDelete workqueue.RateLimitingInterface
 	attemptToOrphan workqueue.RateLimitingInterface
 	// GraphBuilder and GC share the absentOwnerCache. Objects that are known to
 	// be non-existent are added to the cached.
 	absentOwnerCache *ReferenceCache
 	sharedInformers  informerfactory.InformerFactory
+	// 不需要被 gc 的资源
 	ignoredResources map[schema.GroupResource]struct{}
 }
 
@@ -134,6 +154,7 @@ func (m *monitor) Run() {
 
 type monitors map[schema.GroupVersionResource]*monitor
 
+// 主要是为每个 deletableResources 的 informer 注册 eventHandler，此处就可以看到真正的生产者了。
 func (gb *GraphBuilder) controllerFor(logger klog.Logger, resource schema.GroupVersionResource, kind schema.GroupVersionKind) (cache.Controller, cache.Store, error) {
 	handlers := cache.ResourceEventHandlerFuncs{
 		// add the event to the dependencyGraphBuilder's graphChanges.
@@ -143,6 +164,7 @@ func (gb *GraphBuilder) controllerFor(logger klog.Logger, resource schema.GroupV
 				obj:       obj,
 				gvk:       kind,
 			}
+			// 将对应的 event push 到 graphChanges 队列中
 			gb.graphChanges.Add(event)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
@@ -154,6 +176,7 @@ func (gb *GraphBuilder) controllerFor(logger klog.Logger, resource schema.GroupV
 				oldObj:    oldObj,
 				gvk:       kind,
 			}
+			// 将对应的 event push 到 graphChanges 队列中
 			gb.graphChanges.Add(event)
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -166,6 +189,7 @@ func (gb *GraphBuilder) controllerFor(logger klog.Logger, resource schema.GroupV
 				obj:       obj,
 				gvk:       kind,
 			}
+			// 将对应的 event push 到 graphChanges 队列中
 			gb.graphChanges.Add(event)
 		},
 	}
@@ -187,6 +211,10 @@ func (gb *GraphBuilder) controllerFor(logger klog.Logger, resource schema.GroupV
 // instead of immediately exiting on an error. It may be called before or after
 // Run. Monitors are NOT started as part of the sync. To ensure all existing
 // monitors are started, call startMonitors.
+// syncMonitors 的主要作用是初始化各个资源对象的 informer，
+// 并调用 gb.controllerFor 为每种资源注册 eventHandler，此处每种资源被称为 monitors，
+// 因为为每种资源注册 eventHandler 时，对于 AddFunc、UpdateFunc 和 DeleteFunc
+// 都会将对应的 event push 到 graphChanges 队列中，每种资源对象的 informer 都作为生产者。
 func (gb *GraphBuilder) syncMonitors(logger klog.Logger, resources map[schema.GroupVersionResource]struct{}) error {
 	gb.monitorLock.Lock()
 	defer gb.monitorLock.Unlock()
@@ -244,14 +272,18 @@ func (gb *GraphBuilder) startMonitors(logger klog.Logger) {
 	gb.monitorLock.Lock()
 	defer gb.monitorLock.Unlock()
 
+	// 1、当 GraphBuilder 调用 run 方法后，running 会设置为 true
 	if !gb.running {
 		return
 	}
 
 	// we're waiting until after the informer start that happens once all the controllers are initialized.  This ensures
 	// that they don't get unexpected events on their work queues.
+	// 2、当 kube-controller-manager 中所有的 controllers 在启动流程中都启动后
+	//    会 close 掉 informersStarted
 	<-gb.informersStarted
 
+	// 3、启动所有 informer
 	monitors := gb.monitors
 	started := 0
 	for _, monitor := range monitors {
@@ -626,7 +658,50 @@ func identityFromEvent(event *event, accessor metav1.Object) objectReference {
 }
 
 // Dequeueing an event from graphChanges, updating graph, populating dirty_queue.
+/*
+runProcessGraphChanges 方法的主要功能是处理 graphChanges 中的事件将其分别放到 GraphBuilder 的
+attemptToDelete 和 attemptToOrphan 两个队列中，代码主要逻辑为：
+
+1、从 graphChanges 队列中取出一个 item 即 event；
+2、获取 event 的 accessor，accessor 是一个 object 的 meta.Interface，里面包含访问 object meta 中所有字段的方法；
+3、通过 accessor 获取 UID 判断 uidToNode 中是否存在该 object；
+4、若 uidToNode 中不存在该 node 且该事件是 addEvent 或 updateEvent，则为该 object 创建对应的 node，
+	并调用 gb.insertNode 将该 node 加到 uidToNode 中，然后将该 node 添加到其 owner 的 dependents 中，
+	执行完 gb.insertNode 中的操作后再调用 gb.processTransitions 方法判断该对象是否处于删除状态，
+	若处于删除状态会判断该对象是以 orphan 模式删除还是以 foreground 模式删除，若以 orphan 模式删除，
+	则将该 node 加入到 attemptToOrphan 队列中，
+	若以 foreground 模式删除则将该对象以及其所有 dependents 都加入到 attemptToDelete 队列中；
+5、若 uidToNode 中存在该 node 且该事件是 addEvent 或 updateEvent 时，此时可能是一个 update 操作，
+	调用 referencesDiffs 方法检查该对象的 OwnerReferences 字段是否有变化，若有变化(1)调用 gb.addUnblockedOwnersToDeleteQueue
+	将被删除以及更新的 owner 对应的 node 加入到 attemptToDelete 中，
+	因为此时该 node 中已被删除或更新的 owner 可能处于删除状态且阻塞在该 node 处，
+	此时有三种方式避免该 node 的 owner 处于删除阻塞状态，一是等待该 node 被删除，
+	二是将该 node 自身对应 owner 的 OwnerReferences 字段删除，
+	三是将该 node OwnerReferences 字段中对应 owner 的 BlockOwnerDeletion 设置为 false；
+	(2)更新该 node 的 owners 列表；
+	(3)若有新增的 owner，将该 node 加入到新 owner 的 dependents 中；
+	(4) 若有被删除的 owner，将该 node 从已删除 owner 的 dependents 中删除；
+	以上操作完成后，检查该 node 是否处于删除状态并进行标记，最后调用 gb.processTransitions 方法检查该 node 是否要被删除；
+
+	举个例子，若以 foreground 模式删除 deployment 时，deployment 的 dependents 列表中有对应的 rs，
+	那么 deployment 的删除会阻塞住等待其依赖 rs 的删除，此时 rs 有三种方法不阻塞 deployment 的删除操作，
+	一是 rs 对象被删除，
+	二是删除 rs 对象 OwnerReferences 字段中对应的 deployment，
+	三是将 rs 对象OwnerReferences 字段中对应的 deployment 配置 BlockOwnerDeletion 设置为 false，文末会有示例演示该操作。
+
+6、若该事件为 deleteEvent，首先从 uidToNode 中删除该对象，然后从该 node 所有 owners 的 dependents 中删除该对象，
+	将该 node 所有的 dependents 加入到 attemptToDelete 队列中，最后检查该 node 的所有 owners，若有处于删除状态的 owner，
+	此时该 owner 可能处于删除阻塞状态正在等待该 node 的删除，将该 owner 加入到 attemptToDelete 中；
+
+总结一下，当从 graphChanges 中取出 event 时，不管是什么 event，主要完成三件时，首先都会将 event 转化为 uidToNode 中的 node 对象，
+	其次
+	一是更新 uidToNode 中维护的依赖关系，
+	二是更新该 node 的 owners 以及 owners 的 dependents，
+	三是检查该 node 的 owners 是否要被删除以及该 node 的 dependents 是否要被删除，
+	若需要删除则根据 node 的删除策略将其添加到 attemptToOrphan 或者 attemptToDelete 队列中；
+*/
 func (gb *GraphBuilder) processGraphChanges(logger klog.Logger) bool {
+	// 1、从 graphChanges 取出一个 event
 	item, quit := gb.graphChanges.Get()
 	if quit {
 		return false
@@ -654,6 +729,7 @@ func (gb *GraphBuilder) processGraphChanges(logger klog.Logger) bool {
 	)
 
 	// Check if the node already exists
+	// 2、若存在 node 对象，从 uidToNode 中取出该 event 的 node 对象
 	existingNode, found := gb.uidToNode.Read(accessor.GetUID())
 	if found && !event.virtual && !existingNode.isObserved() {
 		// this marks the node as having been observed via an informer event
@@ -691,7 +767,9 @@ func (gb *GraphBuilder) processGraphChanges(logger klog.Logger) bool {
 		existingNode.markObserved()
 	}
 	switch {
+	// 3、若 event 为 add 或 update 类型以及对应的 node 对象不存在时
 	case (event.eventType == addEvent || event.eventType == updateEvent) && !found:
+		// 4、为 node 创建 event 对象
 		newNode := &node{
 			identity:           identityFromEvent(event, accessor),
 			dependents:         make(map[*node]struct{}),
@@ -699,13 +777,18 @@ func (gb *GraphBuilder) processGraphChanges(logger klog.Logger) bool {
 			deletingDependents: beingDeleted(accessor) && hasDeleteDependentsFinalizer(accessor),
 			beingDeleted:       beingDeleted(accessor),
 		}
+		// 5、在 uidToNode 中添加该 node 对象
 		gb.insertNode(logger, newNode)
 		// the underlying delta_fifo may combine a creation and a deletion into
 		// one event, so we need to further process the event.
+		// 6、检查并处理 node 的删除操作
 		gb.processTransitions(logger, event.oldObj, accessor, newNode)
 	case (event.eventType == addEvent || event.eventType == updateEvent) && found:
+		// 7、若 event 为 add 或 update 类型以及对应的 node 对象存在时
+
 		// handle changes in ownerReferences
 		added, removed, changed := referencesDiffs(existingNode.owners, accessor.GetOwnerReferences())
+		// 8、若 node 的 owners 有变化
 		if len(added) != 0 || len(removed) != 0 || len(changed) != 0 {
 			// check if the changed dependency graph unblock owners that are
 			// waiting for the deletion of their dependents.

@@ -490,7 +490,17 @@ func ServerGroupsAndResources(d DiscoveryInterface) ([]*metav1.APIGroup, []*meta
 }
 
 // ServerPreferredResources uses the provided discovery interface to look up preferred resources
+/*
+主要功能是获取集群内所有的 resource 以及其 group、version、verbs 信息，该方法的主要逻辑为：
+
+1、调用 ServerGroups 方法获取集群内所有的 GroupList，ServerGroups 方法
+	首先从 apiserver 通过 /api URL 获取当前版本下所有可用的 APIVersions，
+	再通过 /apis URL 获取 所有可用的 APIVersions 以及其下的所有 APIGroupList；
+2、调用 fetchGroupVersionResources 通过 serverGroupList 再获取到对应的 resource；
+3、将获取到的 version、group、resource 构建成标准格式添加到 metav1.APIResourceList 中
+*/
 func ServerPreferredResources(d DiscoveryInterface) ([]*metav1.APIResourceList, error) {
+	// 1、获取集群内所有的 GroupList
 	var serverGroupList *metav1.APIGroupList
 	var failedGroups map[schema.GroupVersion]error
 	var groupVersionResources map[schema.GroupVersion]*metav1.APIResourceList
@@ -500,6 +510,7 @@ func ServerPreferredResources(d DiscoveryInterface) ([]*metav1.APIResourceList, 
 	// then it is attempt to retrieve both the groups and the resources. "failedGroups"
 	// are Group/Versions returned as stale in AggregatedDiscovery format.
 	ad, ok := d.(AggregatedDiscoveryInterface)
+	// 2、通过 serverGroupList 获取到对应的 resource
 	if ok {
 		serverGroupList, groupVersionResources, failedGroups, err = ad.GroupsAndMaybeResources()
 	} else {
@@ -518,6 +529,7 @@ func ServerPreferredResources(d DiscoveryInterface) ([]*metav1.APIResourceList, 
 	grAPIResources := map[schema.GroupResource]*metav1.APIResource{}        // selected APIResource for a GroupResource
 	gvAPIResourceLists := map[schema.GroupVersion]*metav1.APIResourceList{} // blueprint for a APIResourceList for later grouping
 
+	// 3、格式化 resource
 	for _, apiGroup := range serverGroupList.Groups {
 		for _, version := range apiGroup.Versions {
 			groupVersion := schema.GroupVersion{Group: apiGroup.Name, Version: version.Version}

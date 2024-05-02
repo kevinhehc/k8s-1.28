@@ -211,6 +211,7 @@ func newControllerWithClock(ctx context.Context, podInformer coreinformers.PodIn
 }
 
 // Run the main goroutine responsible for watching and syncing jobs.
+// 其中核心逻辑是调用 jm.worker 执行 syncLoop 操作，worker 方法是 syncJob 方法的别名，最终调用的是 syncJob
 func (jm *Controller) Run(ctx context.Context, workers int) {
 	defer utilruntime.HandleCrash()
 	logger := klog.FromContext(ctx)
@@ -710,7 +711,43 @@ func (jm *Controller) getPodsForJob(ctx context.Context, j *batch.Job) ([]*v1.Po
 // syncJob will sync the job with the given key if it has had its expectations fulfilled, meaning
 // it did not expect to see any more of its pods created or deleted. This function is not meant to be invoked
 // concurrently with the same key.
+/*
+1、从 lister 中获取 job 对象；
+2、判断 job 是否已经执行完成，当 job 的 .status.conditions 中有 Complete 或 Failed 的 type 且对应的 status 为 true 时表示该 job 已经执行完成，例如：
+
+status:
+  completionTime: "2019-12-18T14:16:47Z"
+  conditions:
+  - lastProbeTime: "2019-12-18T14:16:47Z"
+    lastTransitionTime: "2019-12-18T14:16:47Z"
+    status: "True"                // status 为 true
+    type: Complete                      // Complete
+  startTime: "2019-12-18T14:15:35Z"
+  succeeded: 2
+3、获取 job 重试的次数；
+4、调用 jm.expectations.SatisfiedExpectations 判断 job 是否需能进行 sync 操作，Expectations 机制在之前写的
+	” ReplicaSetController 源码分析“一文中详细讲解过，其主要判断条件如下：
+1、该 key 在 ControllerExpectations 中的 adds 和 dels 都 <= 0，即调用 apiserver 的创建和删除接口没有失败过；
+2、该 key 在 ControllerExpectations 中已经超过 5min 没有更新了；
+3、该 key 在 ControllerExpectations 中不存在，即该对象是新创建的；
+4、调用 GetExpectations 方法失败，内部错误；
+5、调用 jm.getPodsForJob 通过 selector 获取 job 关联的 pod，若有孤儿 pod 的 label 与 job 的能匹配则进行关联，若已关联的 pod label 有变化则解除与 job 的关联关系；
+6、分别计算 active、succeeded、failed 状态的 pod 数；
+7、判断 job 是否为首次启动，若首次启动其 job.Status.StartTime 为空，此时首先设置 startTime，然后检查是否有 job.Spec.ActiveDeadlineSeconds 是否为空，
+	若不为空则将其再加入到延迟队列中，等待 ActiveDeadlineSeconds 时间后会再次触发 sync 操作；
+8、判断 job 的重试次数是否超过了 job.Spec.BackoffLimit(默认是6次)，有两个判断方法一是 job 的重试次数以及 job 的状态，二是当 job 的 restartPolicy
+	为 OnFailure 时 container 的重启次数，两者任一个符合都说明 job 处于 failed 状态且原因为 BackoffLimitExceeded；
+9、判断 job 的运行时间是否达到 job.Spec.ActiveDeadlineSeconds 中设定的值，若已达到则说明 job 此时处于 failed 状态且原因为 DeadlineExceeded；
+10、根据以上判断如果 job 处于 failed 状态，则调用 jm.deleteJobPods 并发删除所有 active pods ；
+11、若非 failed 状态，根据 jobNeedsSync 判断是否要进行同步，若需要同步则调用 jm.manageJob 进行同步；
+12、通过检查 job.Spec.Completions 判断 job 是否已经运行完成，若 job.Spec.Completions 字段没有设置值则只要有一个 pod 运行完成该 job 就为 Completed 状态，
+	若设置了 job.Spec.Completions 会通过判断已经运行完成状态的 pod 即 succeeded pod 数是否大于等于该值；
+13、通过以上判断若 job 运行完成了，则更新 job.Status.Conditions 和 job.Status.CompletionTime 字段；
+14、如果 job 的 status 有变化，将 job 的 status 更新到 apiserver；
+在 syncJob 中又调用了 jm.manageJob 处理非 failed 状态下的 sync 操作，
+*/
 func (jm *Controller) syncJob(ctx context.Context, key string) (rErr error) {
+	// 1、计算每次 sync 的运行时间
 	startTime := jm.clock.Now()
 	logger := klog.FromContext(ctx)
 	defer func() {
@@ -724,6 +761,7 @@ func (jm *Controller) syncJob(ctx context.Context, key string) (rErr error) {
 	if len(ns) == 0 || len(name) == 0 {
 		return fmt.Errorf("invalid job key %q: either namespace or name is missing", key)
 	}
+	// 2、从 lister 中获取 job 对象
 	sharedJob, err := jm.jobLister.Jobs(ns).Get(name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -744,6 +782,7 @@ func (jm *Controller) syncJob(ctx context.Context, key string) (rErr error) {
 	job := *sharedJob.DeepCopy()
 
 	// if job was finished previously, we don't want to redo the termination
+	// 3、判断 job 是否已经执行完成
 	if IsJobFinished(&job) {
 		err := jm.podBackoffStore.removeBackoffRecord(key)
 		if err != nil {
@@ -1562,6 +1601,7 @@ func (jm *Controller) manageJob(ctx context.Context, job *batch.Job, jobCtx *syn
 		// prevented from spamming the API service with the pod create requests
 		// after one of its pods fails.  Conveniently, this also prevents the
 		// event spam that those failures would generate.
+		// 7、批量创建 pod，呈指数级增长
 		for batchSize := int32(integer.IntMin(int(diff), controller.SlowStartInitialBatchSize)); diff > 0; batchSize = integer.Int32Min(2*batchSize, diff) {
 			errorCount := len(errCh)
 			wait.Add(int(batchSize))
@@ -1608,6 +1648,7 @@ func (jm *Controller) manageJob(ctx context.Context, job *batch.Job, jobCtx *syn
 			}
 			wait.Wait()
 			// any skipped pods that we never attempted to start shouldn't be expected.
+			// 9、若有创建失败的操作记录在 expectations 中
 			skippedPods := diff - batchSize
 			if errorCount < len(errCh) && skippedPods > 0 {
 				logger.V(2).Info("Slow-start failure. Skipping creating pods, decrementing expectations", "skippedCount", skippedPods, "job", klog.KObj(job))

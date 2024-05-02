@@ -200,6 +200,11 @@ func NewNoExecuteTaintManager(ctx context.Context, c clientset.Interface, podLis
 }
 
 // Run starts NoExecuteTaintManager which will run in loop until `stopCh` is closed.
+/*
+1、处理 nodeUpdateQueue 中的 node 并将其发送到 nodeUpdateChannels 中；
+2、处理 podUpdateQueue 中的 pod 并将其发送到 podUpdateChannels 中；
+3、调用 tc.worker 处理 nodeUpdateChannels 和 podUpdateChannels 中的数据；
+*/
 func (tc *NoExecuteTaintManager) Run(ctx context.Context) {
 	defer utilruntime.HandleCrash()
 	logger := klog.FromContext(ctx)
@@ -274,6 +279,10 @@ func (tc *NoExecuteTaintManager) Run(ctx context.Context) {
 	wg.Wait()
 }
 
+/*
+tc.worker 主要功能是调用 tc.handleNodeUpdate 和 tc.handlePodUpdate
+处理 tc.nodeUpdateChannels 和 tc.podUpdateChannels 两个 channel 中的数据，但会优先处理 nodeUpdateChannels 中的数据。
+*/
 func (tc *NoExecuteTaintManager) worker(ctx context.Context, worker int, done func(), stopCh <-chan struct{}) {
 	defer done()
 
@@ -290,6 +299,7 @@ func (tc *NoExecuteTaintManager) worker(ctx context.Context, worker int, done fu
 			tc.nodeUpdateQueue.Done(nodeUpdate)
 		case podUpdate := <-tc.podUpdateChannels[worker]:
 			// If we found a Pod update we need to empty Node queue first.
+			// 优先处理 nodeUpdateChannels
 		priority:
 			for {
 				select {
@@ -370,6 +380,33 @@ func (tc *NoExecuteTaintManager) cancelWorkWithEvent(logger klog.Logger, nsName 
 	}
 }
 
+/*
+tc.handlePodUpdate 和 tc.handleNodeUpdate 最终都是调用 tc.processPodOnNode 检查 pod 是否容忍 node 的 taints，
+tc.processPodOnNode 首先检查 pod 的 tolerations 是否能匹配 node 上所有的 taints，
+若无法完全匹配则将 pod 加入到 taintEvictionQueue 然后被删除，若能匹配首先获取 pod tolerations 中的最小容忍时间，
+如果 tolerations 未设置容忍时间说明会一直容忍则直接返回，否则加入到 taintEvictionQueue 的延迟队列中，
+当达到最小容忍时间时 pod 会被加入到 taintEvictionQueue 中并驱逐。
+
+通常情况下，如果给一个节点添加了一个 effect 值为 NoExecute 的 taint，则任何不能忍受这个 taint 的 pod 都会马上被驱逐，
+任何可以忍受这个 taint 的 pod 都不会被驱逐。
+但是，如果 pod 存在一个 effect 值为 NoExecute 的 toleration 指定了可选属性 tolerationSeconds 的值，
+则表示在给节点添加了上述 taint 之后，pod 还能继续在节点上运行的时间。
+*/
+
+/*
+------------------------------------------------
+例如，
+
+tolerations:
+  - key: "key1"
+    operator: "Equal"
+    value: "value1"
+    effect: "NoExecute"
+    tolerationSeconds: 3600
+
+这表示如果这个 pod 正在运行，然后一个匹配的 taint 被添加到其所在的节点，那么 pod 还将继续在节点上运行 3600 秒，
+然后被驱逐。如果在此之前上述 taint 被删除了，则 pod 不会被驱逐。
+*/
 func (tc *NoExecuteTaintManager) processPodOnNode(
 	ctx context.Context,
 	podNamespacedName types.NamespacedName,
@@ -382,6 +419,7 @@ func (tc *NoExecuteTaintManager) processPodOnNode(
 	if len(taints) == 0 {
 		tc.cancelWorkWithEvent(logger, podNamespacedName)
 	}
+	// 1、检查 pod 的 tolerations 是否匹配所有 taints
 	allTolerated, usedTolerations := v1helper.GetMatchingTolerations(taints, tolerations)
 	if !allTolerated {
 		logger.V(2).Info("Not all taints are tolerated after update for pod on node", "pod", podNamespacedName.String(), "node", klog.KRef("", nodeName))
@@ -390,6 +428,8 @@ func (tc *NoExecuteTaintManager) processPodOnNode(
 		tc.taintEvictionQueue.AddWork(ctx, NewWorkArgs(podNamespacedName.Name, podNamespacedName.Namespace), time.Now(), time.Now())
 		return
 	}
+
+	// 2、获取最小容忍时间
 	minTolerationTime := getMinTolerationTime(usedTolerations)
 	// getMinTolerationTime returns negative value to denote infinite toleration.
 	if minTolerationTime < 0 {
@@ -398,6 +438,7 @@ func (tc *NoExecuteTaintManager) processPodOnNode(
 		return
 	}
 
+	// 3、若存在最小容忍时间则将其加入到延时队列中
 	startTime := now
 	triggerTime := startTime.Add(minTolerationTime)
 	scheduledEviction := tc.taintEvictionQueue.GetWorkerUnsafe(podNamespacedName.String())
@@ -411,6 +452,11 @@ func (tc *NoExecuteTaintManager) processPodOnNode(
 	tc.taintEvictionQueue.AddWork(ctx, NewWorkArgs(podNamespacedName.Name, podNamespacedName.Namespace), startTime, triggerTime)
 }
 
+/*
+1、通过 podLister 获取 pod 对象；
+2、获取 pod 所在 node 的 taints；
+3、调用 tc.processPodOnNode 进行处理；
+*/
 func (tc *NoExecuteTaintManager) handlePodUpdate(ctx context.Context, podUpdate podUpdateItem) {
 	pod, err := tc.podLister.Pods(podUpdate.podNamespace).Get(podUpdate.podName)
 	logger := klog.FromContext(ctx)
@@ -449,9 +495,16 @@ func (tc *NoExecuteTaintManager) handlePodUpdate(ctx context.Context, podUpdate 
 	if !ok {
 		return
 	}
+	// 调用 tc.processPodOnNode 进行处理
 	tc.processPodOnNode(ctx, podNamespacedName, nodeName, pod.Spec.Tolerations, taints, time.Now())
 }
 
+/*
+1、首先通过 nodeLister 获取 node 对象；
+2、获取 node 上 effect 为 NoExecute 的 taints；
+3、调用 tc.getPodsAssignedToNode 获取该 node 上的所有 pods；
+4、若 node 上的 taints 为空直接返回，否则遍历每一个 pod 调用 tc.processPodOnNode 检查 pod 是否要被驱逐；
+*/
 func (tc *NoExecuteTaintManager) handleNodeUpdate(ctx context.Context, nodeUpdate nodeUpdateItem) {
 	node, err := tc.nodeLister.Get(nodeUpdate.nodeName)
 	logger := klog.FromContext(ctx)
@@ -470,6 +523,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(ctx context.Context, nodeUpdat
 
 	// Create or Update
 	logger.V(4).Info("Noticed node update", "node", klog.KObj(node))
+	// 1、获取 node 的 taints
 	taints := getNoExecuteTaints(node.Spec.Taints)
 	func() {
 		tc.taintedNodesLock.Lock()
@@ -485,6 +539,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(ctx context.Context, nodeUpdat
 	// This is critical that we update tc.taintedNodes before we call getPodsAssignedToNode:
 	// getPodsAssignedToNode can be delayed as long as all future updates to pods will call
 	// tc.PodUpdated which will use tc.taintedNodes to potentially delete delayed pods.
+	// 2、获取 node 上的所有 pod
 	pods, err := tc.getPodsAssignedToNode(node.Name)
 	if err != nil {
 		logger.Error(err, "Failed to get pods assigned to node", "node", klog.KObj(node))
@@ -494,6 +549,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(ctx context.Context, nodeUpdat
 		return
 	}
 	// Short circuit, to make this controller a bit faster.
+	// 3、若不存在 taints，则取消所有的驱逐操作
 	if len(taints) == 0 {
 		logger.V(4).Info("All taints were removed from the node. Cancelling all evictions...", "node", klog.KObj(node))
 		for i := range pods {
@@ -505,6 +561,7 @@ func (tc *NoExecuteTaintManager) handleNodeUpdate(ctx context.Context, nodeUpdat
 	now := time.Now()
 	for _, pod := range pods {
 		podNamespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+		// 4、调用 tc.processPodOnNode 进行处理
 		tc.processPodOnNode(ctx, podNamespacedName, node.Name, pod.Spec.Tolerations, taints, now)
 	}
 }

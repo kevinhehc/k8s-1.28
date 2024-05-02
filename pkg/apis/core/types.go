@@ -2977,10 +2977,14 @@ const (
 	// but allow all pods submitted to Kubelet without going through the scheduler
 	// to start, and allow all already-running pods to continue running.
 	// Enforced by the scheduler.
+	// 不容忍该污点的 pod 不会被调度到该节点上，通过 kubelet 管理的 pod(static pod)不受限制，
+	// 之前没有设置污点的 pod 如果已运行在此节点(有污点的节点)上，可以继续运行；
 	TaintEffectNoSchedule TaintEffect = "NoSchedule"
 	// Like TaintEffectNoSchedule, but the scheduler tries not to schedule
 	// new pods onto the node, rather than prohibiting new pods from scheduling
 	// onto the node entirely. Enforced by the scheduler.
+	// 调度器尽量避免把 pod 调度到具有该污点的节点上，如果不能避免(如其他节点资源不足)，
+	// pod 也能调度到这个污点节点上，已存在于此节点上的 pod 不会被驱逐；
 	TaintEffectPreferNoSchedule TaintEffect = "PreferNoSchedule"
 	// NOT YET IMPLEMENTED. TODO: Uncomment field once it is implemented.
 	// Like TaintEffectNoSchedule, but additionally do not allow pods submitted to
@@ -2990,6 +2994,7 @@ const (
 
 	// Evict any already-running pods that do not tolerate the taint.
 	// Currently enforced by NodeController.
+	// 不容忍该污点的 pod 不会被调度到该节点上，同时会将已调度到该节点上但不容忍 node 污点的 pod 驱逐掉；
 	TaintEffectNoExecute TaintEffect = "NoExecute"
 )
 

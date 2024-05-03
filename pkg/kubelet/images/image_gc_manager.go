@@ -287,10 +287,18 @@ func (im *realImageGCManager) detectImages(ctx context.Context, detectTime time.
 	return imagesInUse, nil
 }
 
+// GarbageCollect
+/*
+1、首先调用 im.statsProvider.ImageFsStats 获取容器镜像存储目录挂载点文件系统的磁盘信息；
+2、获取挂载点的 available 和 capacity 信息并计算其使用率；
+3、若使用率大于 HighThresholdPercent，首先根据 LowThresholdPercent 值计算需要释放的磁盘量，
+	然后调用 im.freeSpace 释放未使用的 image 直到满足磁盘空闲率；
+*/
 func (im *realImageGCManager) GarbageCollect(ctx context.Context) error {
 	ctx, otelSpan := im.tracer.Start(ctx, "Images/GarbageCollect")
 	defer otelSpan.End()
 	// Get disk usage on disk holding images.
+	// 1、获取容器镜像存储目录挂载点文件系统的磁盘信息
 	fsStats, err := im.statsProvider.ImageFsStats(ctx)
 	if err != nil {
 		return err
@@ -317,10 +325,13 @@ func (im *realImageGCManager) GarbageCollect(ctx context.Context) error {
 	}
 
 	// If over the max threshold, free enough to place us at the lower threshold.
+	// 2、若使用率大于 HighThresholdPercent，此时需要回收镜像
 	usagePercent := 100 - int(available*100/capacity)
 	if usagePercent >= im.policy.HighThresholdPercent {
+		// 3、计算需要释放的磁盘量
 		amountToFree := capacity*int64(100-im.policy.LowThresholdPercent)/100 - available
 		klog.InfoS("Disk usage on image filesystem is over the high threshold, trying to free bytes down to the low threshold", "usage", usagePercent, "highThreshold", im.policy.HighThresholdPercent, "amountToFree", amountToFree, "lowThreshold", im.policy.LowThresholdPercent)
+		// 4、调用 im.freeSpace 回收未使用的镜像信息
 		freed, err := im.freeSpace(ctx, amountToFree, time.Now())
 		if err != nil {
 			return err
@@ -348,7 +359,14 @@ func (im *realImageGCManager) DeleteUnusedImages(ctx context.Context) error {
 // bytes freed is always returned.
 // Note that error may be nil and the number of bytes free may be less
 // than bytesToFree.
+/*
+1、首先调用 im.detectImages 获取已经使用的 images 列表作为 imagesInUse；
+2、遍历 im.imageRecords 根据 imagesInUse 获取所有未使用的 images 信息，im.imageRecords 记录 node 上所有 images 的信息；
+3、根据使用时间对未使用的 images 列表进行排序；
+4、遍历未使用的 images 列表然后调用 im.runtime.RemoveImage 删除镜像，直到回收完所有未使用 images 或者满足空闲率；
+*/
 func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, freeTime time.Time) (int64, error) {
+	// 1、获取已经使用的 images 列表
 	imagesInUse, err := im.detectImages(ctx, freeTime)
 	if err != nil {
 		return 0, err
@@ -358,6 +376,7 @@ func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, 
 	defer im.imageRecordsLock.Unlock()
 
 	// Get all images in eviction order.
+	// 2、获取所有未使用的 images 信息
 	images := make([]evictionInfo, 0, len(im.imageRecords))
 	for image, record := range im.imageRecords {
 		if isImageUsed(image, imagesInUse) {
@@ -375,9 +394,11 @@ func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, 
 			imageRecord: *record,
 		})
 	}
+	// 3、按镜像使用时间进行排序
 	sort.Sort(byLastUsedAndDetected(images))
 
 	// Delete unused images until we've freed up enough space.
+	// 4、回收未使用的镜像
 	var deletionErrors []error
 	spaceFreed := int64(0)
 	for _, image := range images {
@@ -398,6 +419,7 @@ func (im *realImageGCManager) freeSpace(ctx context.Context, bytesToFree int64, 
 
 		// Remove image. Continue despite errors.
 		klog.InfoS("Removing image to free bytes", "imageID", image.id, "size", image.size)
+		// 5、调用 im.runtime.RemoveImage 删除镜像
 		err := im.runtime.RemoveImage(ctx, container.ImageSpec{Image: image.id})
 		if err != nil {
 			deletionErrors = append(deletionErrors, err)

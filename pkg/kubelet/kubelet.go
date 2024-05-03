@@ -407,6 +407,8 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		}
 	}
 
+	// MinAge、MaxPerPodContainer、MaxContainers 分别上文章开头提到的与容器垃圾回收有关的
+	// 三个参数
 	containerGCPolicy := kubecontainer.GCPolicy{
 		MinAge:             minimumGCAge.Duration,
 		MaxPerPodContainer: int(maxPerPodContainerCount),
@@ -739,6 +741,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	}
 
 	// setup containerGC
+	// 初始化 containerGC 模块
 	containerGC, err := kubecontainer.NewContainerGC(klet.containerRuntime, containerGCPolicy, klet.sourcesReady)
 	if err != nil {
 		return nil, err
@@ -1394,8 +1397,37 @@ func (kl *Kubelet) setupDataDirs() error {
 }
 
 // StartGarbageCollection starts garbage collection threads.
+
+/*
+kubelet 中与容器垃圾回收有关的主要有以下三个参数:
+
+--maximum-dead-containers-per-container: 表示一个 pod 最多可以保存多少个已经停止的容器，默认为1；（maxPerPodContainerCount）
+--maximum-dead-containers：一个 node 上最多可以保留多少个已经停止的容器，默认为 -1，表示没有限制；
+--minimum-container-ttl-duration：已经退出的容器可以存活的最小时间，默认为 0s；
+与镜像回收有关的主要有以下三个参数：
+
+--image-gc-high-threshold：当 kubelet 磁盘达到多少时，kubelet 开始回收镜像，默认为 85% 开始回收，根目录以及数据盘；
+--image-gc-low-threshold：回收镜像时当磁盘使用率减少至多少时停止回收，默认为 80%；
+--minimum-image-ttl-duration：未使用的镜像在被回收前的最小存留时间，默认为 2m0s；
+kubelet 中容器回收过程如下: pod 中的容器退出时间超过--minimum-container-ttl-duration后会被标记为可回收，
+一个 pod 中最多可以保留--maximum-dead-containers-per-container个已经停止的容器，
+一个 node 上最多可以保留--maximum-dead-containers个已停止的容器。
+在回收容器时，kubelet 会按照容器的退出时间排序，最先回收退出时间最久的容器。
+需要注意的是，kubelet 在回收时会将 pod 中的 container 与 sandboxes 分别进行回收，且在回收容器后会将其对应的 log dir 也进行回收；
+
+kubelet 中镜像回收过程如下: 当容器镜像挂载点文件系统的磁盘使用率大于--image-gc-high-threshold时（
+containerRuntime 为 docker 时，镜像存放目录默认为 /var/lib/docker），kubelet 开始删除节点中未使用的容器镜像，
+直到磁盘使用率降低至--image-gc-low-threshold 时停止镜像的垃圾回收。
+*/
+
+/*
+1、启动 containerGC goroutine，ContainerGC 间隔时间默认为 1 分钟；
+2、检查 --image-gc-high-threshold 参数的值，若为 100 则禁用 imageGC；
+3、启动 imageGC goroutine，imageGC 间隔时间默认为 5 分钟；
+*/
 func (kl *Kubelet) StartGarbageCollection() {
 	loggedContainerGCFailure := false
+	// 1、启动容器垃圾回收服务
 	go wait.Until(func() {
 		ctx := context.Background()
 		if err := kl.containerGC.GarbageCollect(ctx); err != nil {
@@ -1414,11 +1446,13 @@ func (kl *Kubelet) StartGarbageCollection() {
 	}, ContainerGCPeriod, wait.NeverStop)
 
 	// when the high threshold is set to 100, stub the image GC manager
+	// 2、检查 ImageGCHighThresholdPercent 参数的值
 	if kl.kubeletConfiguration.ImageGCHighThresholdPercent == 100 {
 		klog.V(2).InfoS("ImageGCHighThresholdPercent is set 100, Disable image GC")
 		return
 	}
 
+	// 3、启动镜像垃圾回收服务
 	prevImageGCFailed := false
 	go wait.Until(func() {
 		ctx := context.Background()

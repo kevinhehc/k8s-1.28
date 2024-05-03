@@ -224,14 +224,33 @@ func (cgc *containerGC) evictableContainers(ctx context.Context, minAge time.Dur
 }
 
 // evict all containers that are evictable
+/*
+1、首先调用 cgc.evictableContainers 获取可被回收的容器作为 evictUnits，可被回收的容器指非 running 状态且创建时间超过 MinAge，
+	evictUnits 数组中包含 pod 与 container 的对应关系；
+2、回收 deleted 状态以及 terminated 状态的 pod，遍历 evictUnits，若 pod 是否处于 deleted 或者 terminated 状态，
+	则调用 cgc.removeOldestN 回收 pod 中的所有容器。deleted 状态指 pod 已经被删除或者其 status.phase
+	为 failed 且其 status.reason 为 evicted 或者 pod.deletionTimestamp != nil 且 pod 中所有容器的 status
+	为 terminated 或者 waiting 状态，terminated 状态指 pod 处于 Failed 或者 succeeded 状态；
+3、对于非 deleted 或者 terminated 状态的 pod，调用 cgc.enforceMaxContainersPerEvictUnit 为其保留 MaxPerPodContainer
+	个已经退出的容器，按照容器退出的时间进行排序优先删除退出时间最久的，MaxPerPodContainer 在上文已经提过，
+	表示一个 pod 最多可以保存多少个已经停止的容器，默认为1，可以使用 --maximum-dead-containers-per-container 在启动时指定；
+4、若 kubelet 启动时指定了--maximum-dead-containers（默认为 -1 即不限制），即需要为 node 保留退出的容器数，
+	若 node 上保留已经停止的容器数超过 --maximum-dead-containers，首先计算需要为每个 pod 保留多少个已退出的容器保证其总数不超过
+	--maximum-dead-containers 的值，若计算结果小于 1 则取 1，即至少保留一个，然后删除每个 pod 中不需要保留的容器，
+	此时若 node 上保留已经停止的容器数依然超过需要保留的最大值，则将 evictUnits 中的容器按照退出时间进行排序删除退出时间最久的容器，
+	使 node 上保留已经停止的容器数满足 --maximum-dead-containers 值；
+*/
 func (cgc *containerGC) evictContainers(ctx context.Context, gcPolicy kubecontainer.GCPolicy, allSourcesReady bool, evictNonDeletedPods bool) error {
 	// Separate containers by evict units.
+	// 1、获取可被回收的容器列表
 	evictUnits, err := cgc.evictableContainers(ctx, gcPolicy.MinAge)
 	if err != nil {
 		return err
 	}
 
 	// Remove deleted pod containers if all sources are ready.
+	// 2、回收 Deleted 状态以及 Terminated 状态的 pod，此处 allSourcesReady 指 kubelet
+	//    支持的三种 podSource 是否都可用
 	if allSourcesReady {
 		for key, unit := range evictUnits {
 			if cgc.podStateProvider.ShouldPodContentBeRemoved(key.uid) || (evictNonDeletedPods && cgc.podStateProvider.ShouldPodRuntimeBeRemoved(key.uid)) {
@@ -242,11 +261,14 @@ func (cgc *containerGC) evictContainers(ctx context.Context, gcPolicy kubecontai
 	}
 
 	// Enforce max containers per evict unit.
+	// 3、为非 Deleted 状态以及 Terminated 状态的 pod 保留 MaxPerPodContainer 个已经退出的容器
 	if gcPolicy.MaxPerPodContainer >= 0 {
 		cgc.enforceMaxContainersPerEvictUnit(ctx, evictUnits, gcPolicy.MaxPerPodContainer)
 	}
 
 	// Enforce max total number of containers.
+	// 4、若 kubelet 启动时指定了 --maximum-dead-containers（默认为 -1 即不限制）参数，
+	//   此时需要为 node 保留退出的容器数不能超过 --maximum-dead-containers 个
 	if gcPolicy.MaxContainers >= 0 && evictUnits.NumContainers() > gcPolicy.MaxContainers {
 		// Leave an equal number of containers per evict unit (min: 1).
 		numContainersPerEvictUnit := gcPolicy.MaxContainers / evictUnits.NumEvictUnits()
@@ -276,23 +298,34 @@ func (cgc *containerGC) evictContainers(ctx context.Context, gcPolicy kubecontai
 //  2. contains no containers.
 //  3. belong to a non-existent (i.e., already removed) pod, or is not the
 //     most recently created sandbox for the pod.
+/*
+1、首先获取 node 上所有的 containers 和 sandboxes；
+2、构建 sandboxes 与 pod 的对应关系并将其保存在 sandboxesByPodUID 中；
+3、对 sandboxesByPodUID 列表按创建时间进行排序；
+4、若 sandboxes 所在的 pod 处于 deleted 状态，则删除该 pod 中所有的 sandboxes 否则只保留退出时间最短的一个 sandboxes，
+	deleted 状态在上文 cgc.evictContainers 方法中已经解释过；
+*/
 func (cgc *containerGC) evictSandboxes(ctx context.Context, evictNonDeletedPods bool) error {
+	// 1、获取 node 上所有的 container
 	containers, err := cgc.manager.getKubeletContainers(ctx, true)
 	if err != nil {
 		return err
 	}
 
+	// 2、获取 node 上所有的 sandboxes
 	sandboxes, err := cgc.manager.getKubeletSandboxes(ctx, true)
 	if err != nil {
 		return err
 	}
 
 	// collect all the PodSandboxId of container
+	// 3、收集所有 container 的 PodSandboxId
 	sandboxIDs := sets.NewString()
 	for _, container := range containers {
 		sandboxIDs.Insert(container.PodSandboxId)
 	}
 
+	// 4、构建 sandboxes 与 pod 的对应关系并将其保存在 sandboxesByPodUID 中
 	sandboxesByPod := make(sandboxesByPodUID, len(sandboxes))
 	for _, sandbox := range sandboxes {
 		podUID := types.UID(sandbox.Metadata.Uid)
@@ -309,6 +342,8 @@ func (cgc *containerGC) evictSandboxes(ctx context.Context, evictNonDeletedPods 
 		sandboxesByPod[podUID] = append(sandboxesByPod[podUID], sandboxInfo)
 	}
 
+	// 6、遍历 sandboxesByPod，若 sandboxes 所在的 pod 处于 deleted 状态，
+	// 则删除该 pod 中所有的 sandboxes 否则只保留退出时间最短的一个 sandboxes
 	for podUID, sandboxes := range sandboxesByPod {
 		if cgc.podStateProvider.ShouldPodContentBeRemoved(podUID) || (evictNonDeletedPods && cgc.podStateProvider.ShouldPodRuntimeBeRemoved(podUID)) {
 			// Remove all evictable sandboxes if the pod has been removed.
@@ -325,8 +360,18 @@ func (cgc *containerGC) evictSandboxes(ctx context.Context, evictNonDeletedPods 
 
 // evictPodLogsDirectories evicts all evictable pod logs directories. Pod logs directories
 // are evictable if there are no corresponding pods.
+/*
+1、首先回收 deleted 状态 pod logs dir，
+	遍历 pod logs dir /var/log/pods，/var/log/pods 为 pod logs 的默认目录，
+	pod logs dir 的格式为 /var/log/pods/NAMESPACE_NAME_UID，解析 pod logs dir 获取 pod uid，
+	判断 pod 是否处于 deleted 状态，若处于 deleted 状态则删除其 logs dir；
+
+2、回收 deleted 状态 container logs 链接目录，/var/log/containers 为 container log 的默认目录，
+	其会软链接到 pod 的 log dir 下，例如：
+*/
 func (cgc *containerGC) evictPodLogsDirectories(ctx context.Context, allSourcesReady bool) error {
 	osInterface := cgc.manager.osInterface
+	// 1、回收 deleted 状态 pod logs dir
 	if allSourcesReady {
 		// Only remove pod logs directories when all sources are ready.
 		dirs, err := osInterface.ReadDir(podLogsRootDirectory)
@@ -349,6 +394,7 @@ func (cgc *containerGC) evictPodLogsDirectories(ctx context.Context, allSourcesR
 
 	// Remove dead container log symlinks.
 	// TODO(random-liu): Remove this after cluster logging supports CRI container log path.
+	// 2、回收 deleted 状态 container logs 链接目录
 	logSymlinks, _ := osInterface.Glob(filepath.Join(legacyContainerLogsDir, fmt.Sprintf("*.%s", legacyLogSuffix)))
 	for _, logSymlink := range logSymlinks {
 		if _, err := osInterface.Stat(logSymlink); os.IsNotExist(err) {

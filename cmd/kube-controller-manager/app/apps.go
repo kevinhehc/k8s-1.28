@@ -33,6 +33,11 @@ import (
 	"k8s.io/kubernetes/pkg/controller/statefulset"
 )
 
+/*
+初始化 DaemonSetsController 对象并调用 Run方法启动 daemonset controller，
+从该方法中可以看出 daemonset controller 会监听 daemonsets、controllerRevision、pod 和 node 四种对象资源的变动。
+其中 ConcurrentDaemonSetSyncs的默认值为 2
+*/
 func startDaemonSetController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
 	dsc, err := daemon.NewDaemonSetsController(
 		ctx,

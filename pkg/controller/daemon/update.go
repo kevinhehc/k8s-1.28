@@ -41,8 +41,29 @@ import (
 
 // rollingUpdate identifies the set of old pods to delete, or additional pods to create on nodes,
 // remaining within the constraints imposed by the update strategy.
+/*
+daemonset update 的方式有两种 OnDelete 和 RollingUpdate，当为 OnDelete 时需要用户手动删除每一个 pod 后完成更新操作，
+当为 RollingUpdate 时，daemonset controller 会自动控制升级进度。
+
+当为 RollingUpdate 时，主要逻辑为：
+
+1、获取 daemonset pod 与 node 的映射关系；
+2、根据 controllerrevision 的 hash 值获取所有未更新的 pods；
+3、获取 maxUnavailable, numUnavailable 的 pod 数值，maxUnavailable 是从 ds 的 rollingUpdate 字段中获取的默认值为 1，
+	numUnavailable 的值是通过 daemonset pod 与 node 的映射关系计算每个 node 下是否有 available pod 得到的；
+4、通过 oldPods 获取 oldAvailablePods, oldUnavailablePods 的 pod 列表；
+5、遍历 oldUnavailablePods 列表将需要删除的 pod 追加到 oldPodsToDelete 数组中。oldUnavailablePods 列表中的 pod 分为两种，
+	一种处于更新中，即删除状态，一种处于未更新且异常状态，处于异常状态的都需要被删除；
+6、遍历 oldAvailablePods 列表，此列表中的 pod 都处于正常运行状态，根据 maxUnavailable 值确定是否需要删除该 pod
+	并将需要删除的 pod 追加到 oldPodsToDelete 数组中；
+7、调用 dsc.syncNodes 删除 oldPodsToDelete 数组中的 pods，syncNodes 方法在 manage 阶段已经分析过，此处不再详述；
+	rollingUpdate 的结果是找出需要删除的 pods 并进行删除，被删除的 pod 在下一个 syncLoop 中会通过 manage 方法使用最新版本的
+	daemonset template 进行创建，整个滚动更新的过程是通过先删除再创建的方式一步步完成更新的，
+	每次操作都是严格按照 maxUnavailable 的值确定需要删除的 pod 数。
+*/
 func (dsc *DaemonSetsController) rollingUpdate(ctx context.Context, ds *apps.DaemonSet, nodeList []*v1.Node, hash string) error {
 	logger := klog.FromContext(ctx)
+	// 1、获取 daemonset pod 与 node 的映射关系
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds, false)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)

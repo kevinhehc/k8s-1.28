@@ -278,6 +278,15 @@ func (dsc *DaemonSetsController) deleteDaemonset(logger klog.Logger, obj interfa
 }
 
 // Run begins watching and syncing daemon sets.
+/*
+在 Run 方法中会启动两个操作，一个就是 dsc.runWorker 执行的 sync 操作，另一个就是 dsc.failedPodsBackoff.GC 执行的 gc 操作，主要逻辑为：
+
+1、等待 informer 缓存同步完成；
+2、启动两个 goroutine 分别执行 dsc.runWorker；
+3、启动一个 goroutine 每分钟执行一次 dsc.failedPodsBackoff.GC，
+	从 startDaemonSetController 方法中可以看到 failedPodsBackoff 的 duration为1s，max duration为15m，
+	failedPodsBackoff 的主要作用是当发现 daemon pod 状态为 failed 时，会定时重启该 pod；
+*/
 func (dsc *DaemonSetsController) Run(ctx context.Context, workers int) {
 	defer utilruntime.HandleCrash()
 
@@ -296,9 +305,11 @@ func (dsc *DaemonSetsController) Run(ctx context.Context, workers int) {
 	}
 
 	for i := 0; i < workers; i++ {
+		// sync 操作
 		go wait.UntilWithContext(ctx, dsc.runWorker, time.Second)
 	}
 
+	// GC 操作
 	go wait.Until(dsc.failedPodsBackoff.GC, BackoffGCInterval, ctx.Done())
 
 	<-ctx.Done()
@@ -752,6 +763,7 @@ func (dsc *DaemonSetsController) getDaemonPods(ctx context.Context, ds *apps.Dae
 // This also reconciles ControllerRef by adopting/orphaning.
 // Note that returned Pods are pointers to objects in the cache.
 // If you want to modify one, you need to deep-copy it first.
+// getNodesToDaemonPods 是用来获取已存在 daemon pod 与 node 的映射关系，并且会通过 adopt/orphan 方法关联以及释放对应的 pod。
 func (dsc *DaemonSetsController) getNodesToDaemonPods(ctx context.Context, ds *apps.DaemonSet, includeDeletedTerminal bool) (map[string][]*v1.Pod, error) {
 	claimedPods, err := dsc.getDaemonPods(ctx, ds)
 	if err != nil {
@@ -805,6 +817,17 @@ func (dsc *DaemonSetsController) resolveControllerRef(namespace string, controll
 //   - nodesNeedingDaemonPods: the pods need to start on the node
 //   - podsToDelete: the Pods need to be deleted on the node
 //   - err: unexpected error
+//
+// podsShouldBeOnNode 方法用来确定在给定的节点上需要创建还是删除 daemon pod，主要逻辑为：
+//
+// 1、调用 dsc.nodeShouldRunDaemonPod 判断该 node 是否需要运行 daemon pod 以及 pod 能不能调度成功，
+//
+//	该方法返回三个值 wantToRun, shouldSchedule, shouldContinueRunning；
+//
+// 2、通过判断 wantToRun, shouldSchedule, shouldContinueRunning 将需要创建 daemon pod 的 node 列表以及需要删除的 pod 列表获取到，
+//
+//	wantToRun主要检查的是 selector、taints 等是否匹配，shouldSchedule 主要检查 node 上的资源是否充足，
+//	shouldContinueRunning 默认为 true；
 func (dsc *DaemonSetsController) podsShouldBeOnNode(
 	logger klog.Logger,
 	node *v1.Node,
@@ -813,6 +836,7 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 	hash string,
 ) (nodesNeedingDaemonPods, podsToDelete []string) {
 
+	// 1、判断该 node 是否需要运行 daemon pod 以及能不能调度成功
 	shouldRun, shouldContinueRunning := NodeShouldRunDaemonPod(node, ds)
 	daemonPods, exists := nodeToDaemonPods[node.Name]
 
@@ -957,8 +981,17 @@ func (dsc *DaemonSetsController) updateDaemonSet(ctx context.Context, ds *apps.D
 // After figuring out which nodes should run a Pod of ds but not yet running one and
 // which nodes should not run a Pod of ds but currently running one, it calls function
 // syncNodes with a list of pods to remove and a list of nodes to run a Pod of ds.
+/*
+manage 主要是用来保证 ds 的 pod 数正常运行在每一个 node 上，其主要逻辑为：
+
+1、调用 dsc.getNodesToDaemonPods 获取已存在 daemon pod 与 node 的映射关系；
+2、遍历所有 node，调用 dsc.podsShouldBeOnNode 方法来确定在给定的节点上需要创建还是删除 daemon pod；
+3、判断是否启动了 ScheduleDaemonSetPodsfeature-gates 特性，若启动了则需要删除通过默认调度器已经调度到不存在 node 上的 daemon pod；
+4、调用 dsc.syncNodes 为对应的 node 创建 daemon pod 以及删除多余的 pods；
+*/
 func (dsc *DaemonSetsController) manage(ctx context.Context, ds *apps.DaemonSet, nodeList []*v1.Node, hash string) error {
 	// Find out the pods which are created for the nodes by DaemonSet.
+	// 1、获取已存在 daemon pod 与 node 的映射关系
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds, false)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)
@@ -967,6 +1000,7 @@ func (dsc *DaemonSetsController) manage(ctx context.Context, ds *apps.DaemonSet,
 	// For each node, if the node is running the daemon pod but isn't supposed to, kill the daemon
 	// pod. If the node is supposed to run the daemon pod, but isn't, create the daemon pod on the node.
 	logger := klog.FromContext(ctx)
+	// 2、判断每一个 node 是否需要运行 daemon pod
 	var nodesNeedingDaemonPods, podsToDelete []string
 	for _, node := range nodeList {
 		nodesNeedingDaemonPodsOnNode, podsToDeleteOnNode := dsc.podsShouldBeOnNode(
@@ -978,9 +1012,12 @@ func (dsc *DaemonSetsController) manage(ctx context.Context, ds *apps.DaemonSet,
 
 	// Remove unscheduled pods assigned to not existing nodes when daemonset pods are scheduled by scheduler.
 	// If node doesn't exist then pods are never scheduled and can't be deleted by PodGCController.
+	// 3、判断是否启动了 ScheduleDaemonSetPods feature-gates 特性，若启用了则对不存在 node 上的
+	// daemon pod 进行删除
 	podsToDelete = append(podsToDelete, getUnscheduledPodsWithoutNode(nodeList, nodeToDaemonPods)...)
 
 	// Label new pods using the hash label value of the current history when creating them
+	// 4、为对应的 node 创建 daemon pod 以及删除多余的 pods
 	if err = dsc.syncNodes(ctx, ds, podsToDelete, nodesNeedingDaemonPods, hash); err != nil {
 		return err
 	}
@@ -990,6 +1027,27 @@ func (dsc *DaemonSetsController) manage(ctx context.Context, ds *apps.DaemonSet,
 
 // syncNodes deletes given pods and creates new daemon set pods on the given nodes
 // returns slice with errors if any
+/*
+syncNodes 方法主要是为需要 daemon pod 的 node 创建 pod 以及删除多余的 pod，其主要逻辑为：
+
+1、将 createDiff 和 deleteDiff 与 burstReplicas 进行比较，burstReplicas 默认值为 250 即每个 syncLoop 中创建或者删除的
+	pod 数最多为 250 个，若超过其值则剩余需要创建或者删除的 pod 在下一个 syncLoop 继续操作；
+2、将 createDiff 和 deleteDiff 写入到 expectations 中；
+3、并发创建 pod，创建 pod 有两种方法:（1）创建的 pod 不经过默认调度器，直接指定了 pod 的运行节点(即设定pod.Spec.NodeName)；（
+	2）若启用了 ScheduleDaemonSetPods feature-gates 特性，则使用默认调度器进行创建 pod，通过 nodeAffinity来保证每个节点都运行一个 pod；
+4、并发删除 deleteDiff 中的所有 pod；
+ScheduleDaemonSetPods 是一个 feature-gates 特性，其出现在 v1.11 中，在 v1.12 中处于 Beta 版本，v1.17 为 GA 版。
+	最初 daemonset controller 只有一种创建 pod 的方法，即直接指定 pod 的 spec.NodeName 字段，但是目前这种方式已经暴露了许多问题，
+	在以后的发展中社区还是希望能通过默认调度器进行调度，所以才出现了第二种方式，原因主要有以下五点：
+
+1、DaemonSet 无法感知 node 上资源的变化 (#46935, #58868)：当 pod 第一次因资源不够无法创建时，
+	若其他 pod 退出后资源足够时 DaemonSet 无法感知到；
+2、Daemonset 无法支持 Pod Affinity 和 Pod AntiAffinity 的功能(#29276)；
+3、在某些功能上需要实现和 scheduler 重复的代码逻辑, 例如：critical pods (#42028), tolerant/taint；
+4、当 DaemonSet 的 Pod 创建失败时难以 debug，例如：资源不足时，对于 pending pod 最好能打一个 event 说明；
+5、多个组件同时调度时难以实现抢占机制：这也是无法通过横向扩展调度器提高调度吞吐量的一个原因；
+
+*/
 func (dsc *DaemonSetsController) syncNodes(ctx context.Context, ds *apps.DaemonSet, podsToDelete, nodesNeedingDaemonPods []string, hash string) error {
 	// We need to set expectations before creating/deleting pods to avoid race conditions.
 	logger := klog.FromContext(ctx)
@@ -998,6 +1056,7 @@ func (dsc *DaemonSetsController) syncNodes(ctx context.Context, ds *apps.DaemonS
 		return fmt.Errorf("couldn't get key for object %#v: %v", ds, err)
 	}
 
+	// 1、设置 burstReplicas
 	createDiff := len(nodesNeedingDaemonPods)
 	deleteDiff := len(podsToDelete)
 
@@ -1008,6 +1067,7 @@ func (dsc *DaemonSetsController) syncNodes(ctx context.Context, ds *apps.DaemonS
 		deleteDiff = dsc.burstReplicas
 	}
 
+	// 2、写入到 expectations 中
 	dsc.expectations.SetExpectations(logger, dsKey, createDiff, deleteDiff)
 
 	// error channel to communicate back failures.  make the buffer big enough to avoid any blocking
@@ -1030,6 +1090,7 @@ func (dsc *DaemonSetsController) syncNodes(ctx context.Context, ds *apps.DaemonS
 	// prevented from spamming the API service with the pod create requests
 	// after one of its pods fails.  Conveniently, this also prevents the
 	// event spam that those failures would generate.
+	// 3、并发创建 pod，创建的 pod 数依次为 1, 2, 4, 8, ...
 	batchSize := integer.IntMin(createDiff, controller.SlowStartInitialBatchSize)
 	for pos := 0; createDiff > pos; batchSize, pos = integer.IntMin(2*batchSize, createDiff-(pos+batchSize)), pos+batchSize {
 		errorCount := len(errCh)
@@ -1157,9 +1218,31 @@ func storeDaemonSetStatus(
 	return updateErr
 }
 
+/*
+updateDaemonSetStatus 是 syncDaemonSet 中最后执行的方法，主要是用来计算 ds status subresource 中的值并更新其 status。status 如下所示：
+
+status:
+
+	currentNumberScheduled: 1  // 已经运行了 DaemonSet Pod的节点数量
+	desiredNumberScheduled: 1  // 需要运行该DaemonSet Pod的节点数量
+	numberMisscheduled: 0      // 不需要运行 DeamonSet Pod 但是已经运行了的节点数量
+	numberReady: 0             // DaemonSet Pod状态为Ready的节点数量
+	numberAvailable: 1          // DaemonSet Pod状态为Ready且运行时间超过                                                                                                      // Spec.MinReadySeconds 的节点数量
+	numberUnavailable: 0             // desiredNumberScheduled - numberAvailable 的节点数量
+	observedGeneration: 3
+	updatedNumberScheduled: 1  // 已经完成DaemonSet Pod更新的节点数量
+
+updateDaemonSetStatus 主要逻辑为：
+
+1、调用 dsc.getNodesToDaemonPods 获取已存在 daemon pod 与 node 的映射关系；
+2、遍历所有 node，调用 dsc.nodeShouldRunDaemonPod 判断该 node 是否需要运行 daemon pod，然后计算 status 中的部分字段值；
+3、调用 storeDaemonSetStatus 更新 ds status subresource；
+4、判断 ds 是否需要 resync；
+*/
 func (dsc *DaemonSetsController) updateDaemonSetStatus(ctx context.Context, ds *apps.DaemonSet, nodeList []*v1.Node, hash string, updateObservedGen bool) error {
 	logger := klog.FromContext(ctx)
 	logger.V(4).Info("Updating daemon set status")
+	// 1、获取已存在 daemon pod 与 node 的映射关系
 	nodeToDaemonPods, err := dsc.getNodesToDaemonPods(ctx, ds, false)
 	if err != nil {
 		return fmt.Errorf("couldn't get node to daemon pod mapping for daemon set %q: %v", ds.Name, err)
@@ -1168,9 +1251,11 @@ func (dsc *DaemonSetsController) updateDaemonSetStatus(ctx context.Context, ds *
 	var desiredNumberScheduled, currentNumberScheduled, numberMisscheduled, numberReady, updatedNumberScheduled, numberAvailable int
 	now := dsc.failedPodsBackoff.Clock.Now()
 	for _, node := range nodeList {
+		// 2、判断该 node 是否需要运行 daemon pod
 		shouldRun, _ := NodeShouldRunDaemonPod(node, ds)
 		scheduled := len(nodeToDaemonPods[node.Name]) > 0
 
+		// 3、计算 status 中的字段值
 		if shouldRun {
 			desiredNumberScheduled++
 			if !scheduled {
@@ -1205,18 +1290,38 @@ func (dsc *DaemonSetsController) updateDaemonSetStatus(ctx context.Context, ds *
 	}
 	numberUnavailable := desiredNumberScheduled - numberAvailable
 
+	// 4、更新 daemonset status subresource
 	err = storeDaemonSetStatus(ctx, dsc.kubeClient.AppsV1().DaemonSets(ds.Namespace), ds, desiredNumberScheduled, currentNumberScheduled, numberMisscheduled, numberReady, updatedNumberScheduled, numberAvailable, numberUnavailable, updateObservedGen)
 	if err != nil {
 		return fmt.Errorf("error storing status for daemon set %#v: %w", ds, err)
 	}
 
 	// Resync the DaemonSet after MinReadySeconds as a last line of defense to guard against clock-skew.
+	// 5、判断 ds 是否需要 resync
 	if ds.Spec.MinReadySeconds > 0 && numberReady != numberAvailable {
 		dsc.enqueueDaemonSetAfter(ds, time.Duration(ds.Spec.MinReadySeconds)*time.Second)
 	}
 	return nil
 }
 
+/*
+daemonset 中 pod 的创建与删除是与 node 相关联的，所以每次执行 sync 操作时需要遍历所有的 node 进行判断。syncDaemonSet 的主要逻辑为：
+
+1、通过 key 获取 ns 和 name；
+2、从 dsLister 中获取 ds 对象；
+3、从 nodeLister 获取所有 node；
+4、获取 dsKey；
+5、判断 ds 是否处于删除状态；
+6、调用 constructHistory 获取 current 和 old controllerRevision；
+7、调用 dsc.expectations.SatisfiedExpectations 判断是否满足 expectations 机制，expectations 机制的目的就是减少不必要的 sync 操作，
+
+	关于 expectations 机制的详细说明可以参考笔者以前写的 "replicaset controller 源码分析"一文；
+
+8、调用 dsc.manage 执行实际的 sync 操作；
+9、判断是否为更新操作，并执行对应的更新操作逻辑；
+10、调用 dsc.cleanupHistory 根据 spec.revisionHistoryLimit字段清理过期的 controllerrevision；
+11、调用 dsc.updateDaemonSetStatus 更新 ds 状态；
+*/
 func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) error {
 	logger := klog.FromContext(ctx)
 	startTime := dsc.failedPodsBackoff.Clock.Now()
@@ -1225,10 +1330,13 @@ func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) 
 		logger.V(4).Info("Finished syncing daemon set", "daemonset", key, "time", dsc.failedPodsBackoff.Clock.Now().Sub(startTime))
 	}()
 
+	// 1、通过 key 获取 ns 和 name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return err
 	}
+
+	// 2、从 dsLister 中获取 ds 对象
 	ds, err := dsc.dsLister.DaemonSets(namespace).Get(name)
 	if apierrors.IsNotFound(err) {
 		logger.V(3).Info("Daemon set has been deleted", "daemonset", key)
@@ -1239,6 +1347,7 @@ func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) 
 		return fmt.Errorf("unable to retrieve ds %v from store: %v", key, err)
 	}
 
+	// 3、从 nodeLister 获取所有 node
 	nodeList, err := dsc.nodeLister.List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("couldn't get list of nodes when syncing daemon set %#v: %v", ds, err)
@@ -1253,6 +1362,7 @@ func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) 
 	// Don't process a daemon set until all its creations and deletions have been processed.
 	// For example if daemon set foo asked for 3 new daemon pods in the previous call to manage,
 	// then we do not want to call manage on foo until the daemon pods have been created.
+	// 4、获取 dsKey
 	dsKey, err := controller.KeyFunc(ds)
 	if err != nil {
 		return fmt.Errorf("couldn't get key for object %#v: %v", ds, err)
@@ -1266,17 +1376,20 @@ func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) 
 	// DaemonSet history doesn't own DaemonSet pods. We cannot reliably
 	// calculate the status of a DaemonSet being deleted. Therefore, return
 	// here without updating status for the DaemonSet being deleted.
+	// 5、判断 ds 是否处于删除状态
 	if ds.DeletionTimestamp != nil {
 		return nil
 	}
 
 	// Construct histories of the DaemonSet, and get the hash of current history
+	// 6、获取 current 和 old controllerRevision
 	cur, old, err := dsc.constructHistory(ctx, ds)
 	if err != nil {
 		return fmt.Errorf("failed to construct revisions of DaemonSet: %v", err)
 	}
 	hash := cur.Labels[apps.DefaultDaemonSetUniqueLabelKey]
 
+	// 7、判断是否满足 expectations 机制
 	if !dsc.expectations.SatisfiedExpectations(logger, dsKey) {
 		// Only update status. Don't raise observedGeneration since controller didn't process object of that generation.
 		return dsc.updateDaemonSetStatus(ctx, ds, nodeList, hash, false)
@@ -1307,10 +1420,18 @@ func (dsc *DaemonSetsController) syncDaemonSet(ctx context.Context, key string) 
 //   - shouldContinueRunning:
 //     Returns true when a daemonset should continue running on a node if a daemonset pod is already
 //     running on that node.
+/*
+1、调用 NewPod 为该 node 构建一个 daemon pod object；
+2、判断 ds 是否指定了 .Spec.Template.Spec.NodeName 字段；
+3、调用 dsc.simulate 执行 GeneralPredicates 预选算法检查该 node 是否能够调度成功；
+4、判断 GeneralPredicates 预选算法执行后的 reasons 确定 wantToRun, shouldSchedule, shouldContinueRunning 的值；
+*/
 func NodeShouldRunDaemonPod(node *v1.Node, ds *apps.DaemonSet) (bool, bool) {
+	// 1、构建 daemon pod object
 	pod := NewPod(ds, node.Name)
 
 	// If the daemon set specifies a node name, check that it matches with node.Name.
+	// 2、判断 ds 是否指定了 node，若指定了且不为当前 node 直接返回 false
 	if !(ds.Spec.Template.Spec.NodeName == "" || ds.Spec.Template.Spec.NodeName == node.Name) {
 		return false, false
 	}

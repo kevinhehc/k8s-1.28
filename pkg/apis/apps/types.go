@@ -82,6 +82,7 @@ const (
 	// ordering constraints. When a scale operation is performed with this
 	// strategy, new Pods will be created from the specification version indicated
 	// by the StatefulSet's updateRevision.
+	// 滚动更新
 	RollingUpdateStatefulSetStrategyType StatefulSetUpdateStrategyType = "RollingUpdate"
 	// OnDeleteStatefulSetStrategyType triggers the legacy behavior. Version
 	// tracking and ordered rolling restarts are disabled. Pods are recreated

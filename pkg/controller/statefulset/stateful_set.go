@@ -442,6 +442,17 @@ func (ssc *StatefulSetController) worker(ctx context.Context) {
 }
 
 // sync syncs the given statefulset.
+/*
+sync 方法的主要逻辑为：
+
+1、根据 ns/name 获取 sts 对象；
+2、获取 sts 的 selector；
+3、调用 ssc.adoptOrphanRevisions 检查是否有孤儿 controllerrevisions 对象，
+	若有且能匹配 selector 的则添加 ownerReferences 进行关联，已关联但 label 不匹配的则进行释放；
+4、调用 ssc.getPodsForStatefulSet 通过 selector 获取 sts 关联的 pod，
+	若有孤儿 pod 的 label 与 sts 的能匹配则进行关联，若已关联的 pod label 有变化则解除与 sts 的关联关系；
+5、最后调用 ssc.syncStatefulSet 执行真正的 sync 操作；
+*/
 func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 	startTime := time.Now()
 	logger := klog.FromContext(ctx)
@@ -453,6 +464,7 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
+	// 1、获取 sts 对象
 	set, err := ssc.setLister.StatefulSets(namespace).Get(name)
 	if errors.IsNotFound(err) {
 		logger.Info("StatefulSet has been deleted", "key", key)
@@ -470,10 +482,12 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 		return nil
 	}
 
+	// 2、关联以及释放 sts 的 controllerrevisions
 	if err := ssc.adoptOrphanRevisions(ctx, set); err != nil {
 		return err
 	}
 
+	// 3、获取 sts 所关联的 pod
 	pods, err := ssc.getPodsForStatefulSet(ctx, set, selector)
 	if err != nil {
 		return err
@@ -483,6 +497,11 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 }
 
 // syncStatefulSet syncs a tuple of (statefulset, []*v1.Pod).
+/*
+在 syncStatefulSet 中仅仅是调用了 ssc.control.UpdateStatefulSet 方法进行处理。
+ssc.control.UpdateStatefulSet 会调用 defaultStatefulSetControl 的 UpdateStatefulSet 方法，
+defaultStatefulSetControl 是 statefulset controller 中另外一个对象，主要负责处理 statefulset 的更新。
+*/
 func (ssc *StatefulSetController) syncStatefulSet(ctx context.Context, set *apps.StatefulSet, pods []*v1.Pod) error {
 	logger := klog.FromContext(ctx)
 	logger.V(4).Info("Syncing StatefulSet with pods", "statefulSet", klog.KObj(set), "pods", len(pods))

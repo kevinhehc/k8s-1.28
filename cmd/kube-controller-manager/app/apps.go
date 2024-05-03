@@ -63,6 +63,7 @@ func startStatefulSetController(ctx context.Context, controllerContext Controlle
 		controllerContext.InformerFactory.Core().V1().PersistentVolumeClaims(),
 		controllerContext.InformerFactory.Apps().V1().ControllerRevisions(),
 		controllerContext.ClientBuilder.ClientOrDie("statefulset-controller"),
+		// ConcurrentStatefulSetSyncs 默认值为 5
 	).Run(ctx, int(controllerContext.ComponentConfig.StatefulSetController.ConcurrentStatefulSetSyncs))
 	return nil, true, nil
 }

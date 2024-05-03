@@ -80,6 +80,17 @@ type defaultStatefulSetControl struct {
 // strategy allows these constraints to be relaxed - pods will be created and deleted eagerly and
 // in no particular order. Clients using the burst strategy should be careful to ensure they
 // understand the consistency implications of having unpredictable numbers of pods available.
+/*
+1、获取历史 revisions；
+2、计算 currentRevision 和 updateRevision，若 sts 处于更新过程中则 currentRevision 和 updateRevision 值不同；
+3、调用 ssc.updateStatefulSet 执行实际的 sync 操作；
+4、调用 ssc.updateStatefulSetStatus 更新 status subResource；
+5、根据 sts 的 spec.revisionHistoryLimit字段清理过期的 controllerrevision；
+
+在基本操作的回滚阶段提到了过，sts 通过 controllerrevision 保存历史版本，类似于 deployment 的 replicaset，
+与 replicaset 不同的是 controllerrevision 仅用于回滚阶段，在 sts 的滚动升级过程中是通过 currentRevision
+和 updateRevision来进行控制并不会用到 controllerrevision。
+*/
 func (ssc *defaultStatefulSetControl) UpdateStatefulSet(ctx context.Context, set *apps.StatefulSet, pods []*v1.Pod) (*apps.StatefulSetStatus, error) {
 	set = set.DeepCopy() // set is modified when a new revision is created in performUpdate. Make a copy now to avoid mutation errors.
 
@@ -525,6 +536,38 @@ func runForAll(pods []*v1.Pod, fn func(i int) (bool, error), monotonic bool) (bo
 // all Pods with ordinal less than UpdateStrategy.Partition.Ordinal must be at Status.CurrentRevision and all other
 // Pods must be at Status.UpdateRevision. If the returned error is nil, the returned StatefulSetStatus is valid and the
 // update must be recorded. If the error is not nil, the method should be retried until successful.
+/*
+updateStatefulSet 是 sync 操作中的核心方法，对于 statefulset 的创建、扩缩容、更新、删除等操作都会在这个方法中完成，以下是其主要逻辑：
+
+1、分别获取 currentRevision 和 updateRevision 对应的的 statefulset object；
+2、构建 status 对象；
+3、将 statefulset 的 pods 按 ord(ord 为 pod name 中的序号)的值分到 replicas 和 condemned 两个数组中，
+	0 <= ord < Spec.Replicas 的放到 replicas 组，ord >= Spec.Replicas 的放到 condemned 组，
+	replicas 组代表可用的 pod，condemned 组是需要删除的 pod；
+4、找出 replicas 和 condemned 组中的 unhealthy pod，healthy pod 指 running & ready 并且不处于删除状态；
+5、判断 sts 是否处于删除状态；
+6、遍历 replicas 数组，确保 replicas 数组中的容器处于 running & ready状态，其中处于 failed 状态的容器删除重建，
+	未创建的容器则直接创建，最后检查 pod 的信息是否与 statefulset 的匹配，若不匹配则更新 pod 的状态。
+	在此过程中每一步操作都会检查 monotonic 的值，即 sts 是否设置了 Parallel 参数，
+	若设置了则循环处理 replicas 中的所有 pod，否则每次处理一个 pod，剩余 pod 则在下一个 syncLoop 继续进行处理；
+7、按 pod 名称逆序删除 condemned 数组中的 pod，删除前也要确保 pod 处于 running & ready状态，在此过程中也会检查 monotonic 的值，
+	以此来判断是顺序删除还是在下一个 syncLoop 中继续进行处理；
+8、判断 sts 的更新策略 .Spec.UpdateStrategy.Type，若为 OnDelete 则直接返回；
+9、此时更新策略为 RollingUpdate，更新序号大于等于 .Spec.UpdateStrategy.RollingUpdate.Partition 的 pod，在 RollingUpdate 时，
+	并不会关注 monotonic 的值，都是顺序进行处理且等待当前 pod 删除成功后才继续删除小于上一个 pod 序号的 pod，
+	所以 Parallel 的策略在滚动更新时无法使用。
+
+updateStatefulSet 这个方法中包含了 statefulset 的创建、删除、扩若容、更新等操作，在源码层面对于各个功能无法看出明显的界定，
+没有 deployment sync 方法中写的那么清晰，下面还是按 statefulset 的功能再分析一下具体的操作：
+
+创建：在创建 sts 后，sts 对象已被保存至 etcd 中，此时 sync 操作仅仅是创建出需要的 pod，即执行到第 6 步就会结束；
+扩缩容：对于扩若容操作仅仅是创建或者删除对应的 pod，在操作前也会判断所有 pod 是否处于 running & ready状态，
+		然后进行对应的创建/删除操作，在上面的步骤中也会执行到第 6 步就结束了；
+更新：可以看出在第六步之后的所有操作就是与更新相关的了，所以更新操作会执行完整个方法，
+		在更新过程中通过 pod 的 currentRevision 和 updateRevision 来计算 currentReplicas、updatedReplicas 的值，
+		最终完成所有 pod 的更新；
+删除：删除操作就比较明显了，会止于第五步，但是在此之前检查 pod 状态以及分组的操作确实是多余的；
+*/
 func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	ctx context.Context,
 	set *apps.StatefulSet,
@@ -533,6 +576,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	collisionCount int32,
 	pods []*v1.Pod) (*apps.StatefulSetStatus, error) {
 	logger := klog.FromContext(ctx)
+	// 1、分别获取 currentRevision 和 updateRevision 对应的的 statefulset object
 	// get the current and update revisions of the set.
 	currentSet, err := ApplyRevision(set, currentRevision)
 	if err != nil {
@@ -544,6 +588,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	// set the generation, and revisions in the returned status
+	// 2、计算 status
 	status := apps.StatefulSetStatus{}
 	status.ObservedGeneration = set.Generation
 	status.CurrentRevision = currentRevision.Name
@@ -553,6 +598,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	updateStatus(&status, set.Spec.MinReadySeconds, currentRevision, updateRevision, pods)
 
+	// 3、将 statefulset 的 pods 按 ord(ord 为 pod name 中的序数)的值
+	// 分到 replicas 和 condemned 两个数组中
 	replicaCount := int(*set.Spec.Replicas)
 	// slice that will contain all Pods such that getStartOrdinal(set) <= getOrdinal(pod) <= getEndOrdinal(set)
 	replicas := make([]*v1.Pod, replicaCount)
@@ -562,6 +609,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	var firstUnhealthyPod *v1.Pod
 
 	// First we partition pods into two lists valid replicas and condemned Pods
+	// 4、计算 status 字段中的值，将 pod 分配到 replicas和condemned两个数组中
 	for _, pod := range pods {
 		if podInOrdinalRange(pod, set) {
 			// if the ordinal of the pod is within the range of the current number of replicas,
@@ -575,6 +623,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	// for any empty indices in the sequence [0,set.Spec.Replicas) create a new Pod at the correct revision
+	// 5、检查 replicas数组中 [0,set.Spec.Replicas) 下标是否有缺失的 pod，若有缺失的则创建对应的 pod object
+	// 在 newVersionedStatefulSetPod 中会判断是使用 currentSet 还是 updateSet 来创建
 	for ord := getStartOrdinal(set); ord <= getEndOrdinal(set); ord++ {
 		replicaIdx := ord - getStartOrdinal(set)
 		if replicas[replicaIdx] == nil {
@@ -587,9 +637,11 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	// sort the condemned Pods by their ordinals
+	// 6、对 condemned 数组进行排序
 	sort.Sort(descendingOrdinal(condemned))
 
 	// find the first unhealthy Pod
+	// 7、根据 ord 在 replicas 和 condemned 数组中找出 first unhealthy Pod
 	for i := range replicas {
 		if !isHealthy(replicas[i]) {
 			unhealthy++
@@ -615,10 +667,12 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	// If the StatefulSet is being deleted, don't do anything other than updating
 	// status.
+	// 8、判断是否处于删除中
 	if set.DeletionTimestamp != nil {
 		return &status, nil
 	}
 
+	// 9、默认设置为非并行模式
 	monotonic := !allowsBurst(set)
 
 	// First, process each living replica. Exit if we run into an error or something blocking in monotonic mode.
@@ -665,6 +719,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	updateStatus(&status, set.Spec.MinReadySeconds, currentRevision, updateRevision, replicas, condemned)
 
 	// for the OnDelete strategy we short circuit. Pods will be updated when they are manually deleted.
+	// 22、对于 OnDelete 策略直接返回
 	if set.Spec.UpdateStrategy.Type == apps.OnDeleteStatefulSetStrategyType {
 		return &status, nil
 	}
@@ -680,6 +735,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	// we compute the minimum ordinal of the target sequence for a destructive update based on the strategy.
+	// 23、若为 RollingUpdate 策略，则倒序处理 replicas数组中下标大于等于
+	//        Spec.UpdateStrategy.RollingUpdate.Partition 的 pod
 	updateMin := 0
 	if set.Spec.UpdateStrategy.RollingUpdate != nil {
 		updateMin = int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)
@@ -687,6 +744,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	// we terminate the Pod with the largest ordinal that does not match the update revision.
 	for target := len(replicas) - 1; target >= updateMin; target-- {
 
+		// 24、如果Pod的Revision 不等于 updateRevision，且 pod 没有处于删除状态则直接删除 pod
 		// delete the Pod if it is not already terminating and does not match the update revision.
 		if getPodRevision(replicas[target]) != updateRevision.Name && !isTerminating(replicas[target]) {
 			logger.V(2).Info("Pod of StatefulSet is terminating for update",
@@ -701,6 +759,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		}
 
 		// wait for unhealthy Pods on update
+		// 25、如果 pod 非 healthy 状态直接返回
 		if !isHealthy(replicas[target]) {
 			logger.V(4).Info("StatefulSet is waiting for Pod to update",
 				"statefulSet", klog.KObj(set), "pod", klog.KObj(replicas[target]))

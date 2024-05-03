@@ -84,6 +84,7 @@ func startReplicaSetController(ctx context.Context, controllerContext Controller
 }
 
 func startDeploymentController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
+	// 初始化 controller
 	dc, err := deployment.NewDeploymentController(
 		ctx,
 		controllerContext.InformerFactory.Apps().V1().Deployments(),
@@ -94,6 +95,9 @@ func startDeploymentController(ctx context.Context, controllerContext Controller
 	if err != nil {
 		return nil, true, fmt.Errorf("error creating Deployment controller: %v", err)
 	}
+	// 启动 controller
+	// ConcurrentDeploymentSyncs 指定了 deployment controller 中工作的 goroutine 数量，默认值为 5，
+	// 即会启动五个 goroutine 从 workqueue 中取出 object 并进行 sync 操作
 	go dc.Run(ctx, int(controllerContext.ComponentConfig.DeploymentController.ConcurrentDeploymentSyncs))
 	return nil, true, nil
 }

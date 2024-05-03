@@ -168,11 +168,14 @@ func (dc *DeploymentController) Run(ctx context.Context, workers int) {
 	logger.Info("Starting controller", "controller", "deployment")
 	defer logger.Info("Shutting down controller", "controller", "deployment")
 
+	// 1、等待 informer cache 同步完成
 	if !cache.WaitForNamedCacheSync("deployment", ctx.Done(), dc.dListerSynced, dc.rsListerSynced, dc.podListerSynced) {
 		return
 	}
 
+	// 2、启动 5 个 goroutine
 	for i := 0; i < workers; i++ {
+		// 3、在每个 goroutine 中每秒执行一次 dc.worker 方法
 		go wait.UntilWithContext(ctx, dc.worker, time.Second)
 	}
 
@@ -482,6 +485,7 @@ func (dc *DeploymentController) processNextWorkItem(ctx context.Context) bool {
 	}
 	defer dc.queue.Done(key)
 
+	// 若 workQueue 中有任务则进行处理
 	err := dc.syncHandler(ctx, key.(string))
 	dc.handleErr(ctx, err, key)
 
@@ -578,6 +582,18 @@ func (dc *DeploymentController) getPodMapForDeployment(d *apps.Deployment, rsLis
 
 // syncDeployment will sync the deployment with the given key.
 // This function is not meant to be invoked concurrently with the same key.
+/*
+1、调用 getReplicaSetsForDeployment 获取集群中与 Deployment 相关的 ReplicaSet，
+	若发现匹配但没有关联 deployment 的 rs 则通过设置 ownerReferences 字段与 deployment 关联，
+	已关联但不匹配的则删除对应的 ownerReferences；
+2、调用 getPodMapForDeployment 获取当前 Deployment 对象关联的 pod，并根据 rs.UID 对上述 pod 进行分类；
+3、通过判断 deployment 的 DeletionTimestamp 字段确认是否为删除操作；
+4、执行 checkPausedConditions检查 deployment 是否为pause状态并添加合适的condition；
+5、调用 getRollbackTo 函数检查 Deployment 是否有Annotations："deprecated.deployment.rollback.to"字段，
+	如果有，调用 dc.rollback 方法执行 rollback 操作；
+6、调用 dc.isScalingEvent 方法检查是否处于 scaling 状态中；
+7、最后检查是否为更新操作，并根据更新策略 Recreate 或 RollingUpdate 来执行对应的操作；
+*/
 func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) error {
 	logger := klog.FromContext(ctx)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
@@ -592,6 +608,7 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 		logger.V(4).Info("Finished syncing deployment", "deployment", klog.KRef(namespace, name), "duration", time.Since(startTime))
 	}()
 
+	// 1、从 informer cache 中获取 deployment 对象
 	deployment, err := dc.dLister.Deployments(namespace).Get(name)
 	if errors.IsNotFound(err) {
 		logger.V(2).Info("Deployment has been deleted", "deployment", klog.KRef(namespace, name))
@@ -605,6 +622,7 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 	// TODO: Deep-copy only when needed.
 	d := deployment.DeepCopy()
 
+	// 2、判断 selecor 是否为空
 	everything := metav1.LabelSelector{}
 	if reflect.DeepEqual(d.Spec.Selector, &everything) {
 		dc.eventRecorder.Eventf(d, v1.EventTypeWarning, "SelectingAll", "This deployment is selecting all pods. A non-empty selector is required.")
@@ -617,6 +635,7 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 
 	// List ReplicaSets owned by this Deployment, while reconciling ControllerRef
 	// through adoption/orphaning.
+	// 3、获取 deployment 对应的所有 rs，通过 LabelSelector 进行匹配
 	rsList, err := dc.getReplicaSetsForDeployment(ctx, d)
 	if err != nil {
 		return err
@@ -626,11 +645,13 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 	//
 	// * check if a Pod is labeled correctly with the pod-template-hash label.
 	// * check that no old Pods are running in the middle of Recreate Deployments.
+	// 4、获取当前 Deployment 对象关联的 pod，并根据 rs.UID 对 pod 进行分类
 	podMap, err := dc.getPodMapForDeployment(d, rsList)
 	if err != nil {
 		return err
 	}
 
+	// 5、如果该 deployment 处于删除状态，则更新其 status
 	if d.DeletionTimestamp != nil {
 		return dc.syncStatusOnly(ctx, d, rsList)
 	}
@@ -638,6 +659,7 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 	// Update deployment conditions with an Unknown condition when pausing/resuming
 	// a deployment. In this way, we can be sure that we won't timeout when a user
 	// resumes a Deployment with a set progressDeadlineSeconds.
+	// 6、检查是否处于 pause 状态
 	if err = dc.checkPausedConditions(ctx, d); err != nil {
 		return err
 	}
@@ -649,10 +671,12 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 	// rollback is not re-entrant in case the underlying replica sets are updated with a new
 	// revision so we should ensure that we won't proceed to update replica sets until we
 	// make sure that the deployment has cleaned up its rollback spec in subsequent enqueues.
+	// 7、检查是否为回滚操作
 	if getRollbackTo(d) != nil {
 		return dc.rollback(ctx, d, rsList)
 	}
 
+	// 8、检查 deployment 是否处于 scale 状态
 	scalingEvent, err := dc.isScalingEvent(ctx, d, rsList)
 	if err != nil {
 		return err
@@ -661,6 +685,7 @@ func (dc *DeploymentController) syncDeployment(ctx context.Context, key string) 
 		return dc.sync(ctx, d, rsList)
 	}
 
+	// 9、更新操作
 	switch d.Spec.Strategy.Type {
 	case apps.RecreateDeploymentStrategyType:
 		return dc.rolloutRecreate(ctx, d, rsList, podMap)

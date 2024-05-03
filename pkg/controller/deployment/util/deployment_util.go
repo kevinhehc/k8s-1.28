@@ -467,11 +467,13 @@ func MaxSurge(deployment apps.Deployment) int32 {
 // GetProportion will estimate the proportion for the provided replica set using 1. the current size
 // of the parent deployment, 2. the replica count that needs be added on the replica sets of the
 // deployment, and 3. the total replicas added in the replica sets of the deployment so far.
+// 估算出 rs 需要扩容或者缩容的副本数
 func GetProportion(logger klog.Logger, rs *apps.ReplicaSet, d apps.Deployment, deploymentReplicasToAdd, deploymentReplicasAdded int32) int32 {
 	if rs == nil || *(rs.Spec.Replicas) == 0 || deploymentReplicasToAdd == 0 || deploymentReplicasToAdd == deploymentReplicasAdded {
 		return int32(0)
 	}
 
+	// 调用 getReplicaSetFraction 方法
 	rsFraction := getReplicaSetFraction(logger, *rs, d)
 	allowed := deploymentReplicasToAdd - deploymentReplicasAdded
 
@@ -507,7 +509,9 @@ func getReplicaSetFraction(logger klog.Logger, rs apps.ReplicaSet, d apps.Deploy
 
 	// We should never proportionally scale up from zero which means rs.spec.replicas and annotatedReplicas
 	// will never be zero here.
+	// 计算 newRSSize 的公式
 	newRSsize := (float64(*(rs.Spec.Replicas) * deploymentReplicas)) / float64(annotatedReplicas)
+	// 返回最终计算出的结果
 	return integer.RoundToInt32(newRSsize) - *(rs.Spec.Replicas)
 }
 
@@ -781,15 +785,23 @@ func DeploymentTimedOut(ctx context.Context, deployment *apps.Deployment, newSta
 // When one of the followings is true, we're rolling out the deployment; otherwise, we're scaling it.
 // 1) The new RS is saturated: newRS's replicas == deployment's replicas
 // 2) Max number of pods allowed is reached: deployment's replicas + maxSurge == all RSs' replicas
+/*
+1、判断更新策略；
+2、计算 maxSurge 值；
+3、通过 allRSs 计算 currentPodCount 的值；
+4、最后计算 scaleUpCount 值；
+*/
 func NewRSNewReplicas(deployment *apps.Deployment, allRSs []*apps.ReplicaSet, newRS *apps.ReplicaSet) (int32, error) {
 	switch deployment.Spec.Strategy.Type {
 	case apps.RollingUpdateDeploymentStrategyType:
 		// Check if we can scale up.
+		// 1、计算 maxSurge 值
 		maxSurge, err := intstrutil.GetScaledValueFromIntOrPercent(deployment.Spec.Strategy.RollingUpdate.MaxSurge, int(*(deployment.Spec.Replicas)), true)
 		if err != nil {
 			return 0, err
 		}
 		// Find the total number of pods
+		// 2、累加 rs.Spec.Replicas 获取 currentPodCount
 		currentPodCount := GetReplicaCountForReplicaSets(allRSs)
 		maxTotalPods := *(deployment.Spec.Replicas) + int32(maxSurge)
 		if currentPodCount >= maxTotalPods {
@@ -797,6 +809,7 @@ func NewRSNewReplicas(deployment *apps.Deployment, allRSs []*apps.ReplicaSet, ne
 			return *(newRS.Spec.Replicas), nil
 		}
 		// Scale up.
+		// 3、计算 scaleUpCount
 		scaleUpCount := maxTotalPods - currentPodCount
 		// Do not exceed the number of desired replicas.
 		scaleUpCount = int32(integer.IntMin(int(scaleUpCount), int(*(deployment.Spec.Replicas)-*(newRS.Spec.Replicas))))

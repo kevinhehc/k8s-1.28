@@ -420,7 +420,7 @@ var ControllersDisabledByDefault = sets.NewString(
 
 // NewControllerInitializers is a public map of named controller groups (you can start more than one in an init func)
 // paired to their InitFunc.  This allows for structured downstream composition and subdivision.
-// 所有的controller注册的地方
+// 所有的 controller 注册的地方
 func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc {
 	controllers := map[string]InitFunc{}
 

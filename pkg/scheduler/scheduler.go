@@ -393,6 +393,7 @@ func buildQueueingHintMap(es []framework.EnqueueExtensions) internalqueue.Queuei
 }
 
 // Run begins watching and scheduling. It starts scheduling and blocked until the context is done.
+// 若 informer 中的 cache 同步完成后会启动一个循环逻辑执行 sched.scheduleOne 方法。
 func (sched *Scheduler) Run(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	sched.SchedulingQueue.Run(logger)
@@ -493,6 +494,7 @@ func unionedGVKs(queueingHintsPerProfile internalqueue.QueueingHintMapPerProfile
 
 // newPodInformer creates a shared index informer that returns only non-terminal pods.
 // The PodInformer allows indexers to be added, but note that only non-conflict indexers are allowed.
+// 只监听 status.phase 不为 succeeded 以及 failed 状态的 pod，即非 terminating 的 pod。
 func newPodInformer(cs clientset.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
 	selector := fmt.Sprintf("status.phase!=%v,status.phase!=%v", v1.PodSucceeded, v1.PodFailed)
 	tweakListOptions := func(options *metav1.ListOptions) {

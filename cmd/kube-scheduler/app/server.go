@@ -163,6 +163,7 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 	}
 
 	// Start events processing pipeline.
+	// 启动事件广播
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
 	defer cc.EventBroadcaster.Shutdown()
 
@@ -185,6 +186,7 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 	}
 
 	// Start up the healthz server.
+	// 3、启动 http server
 	if cc.SecureServing != nil {
 		handler := buildHandlerChain(newHealthzAndMetricsHandler(&cc.ComponentConfig, cc.InformerFactory, isLeader, checks...), cc.Authentication.Authenticator, cc.Authorization.Authorizer)
 		// TODO: handle stoppedCh and listenerStoppedCh returned by c.SecureServing.Serve
@@ -194,6 +196,7 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 		}
 	}
 
+	// 4、启动所有 informer
 	startInformersAndWaitForSync := func(ctx context.Context) {
 		// Start all informers.
 		cc.InformerFactory.Start(ctx.Done())
@@ -220,6 +223,7 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 		startInformersAndWaitForSync(ctx)
 	}
 	// If leader election is enabled, runCommand via LeaderElector until done and exit.
+	// 5、选举 leader
 	if cc.LeaderElection != nil {
 		cc.LeaderElection.Callbacks = leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
@@ -249,6 +253,7 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 			return fmt.Errorf("couldn't create leader elector: %v", err)
 		}
 
+		// 6、执行 sched.Run() 方法
 		leaderElector.Run(ctx)
 
 		return fmt.Errorf("lost lease")

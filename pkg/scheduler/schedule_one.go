@@ -64,6 +64,19 @@ const (
 )
 
 // scheduleOne does the entire scheduling workflow for a single pod. It is serialized on the scheduling algorithm's host fitting.
+/*
+从 scheduler 调度队列中取出一个 pod，如果该 pod 处于删除状态则跳过
+执行调度逻辑 sched.schedule() 返回通过预算及优选算法过滤后选出的最佳 node
+如果过滤算法没有选出合适的 node，则返回 core.FitError
+若没有合适的 node 会判断是否启用了抢占策略，若启用了则执行抢占机制
+判断是否需要 VolumeScheduling 特性
+执行 reserve plugin
+pod 对应的 spec.NodeName 写上 scheduler 最终选择的 node，更新 scheduler cache
+请求 apiserver 异步处理最终的绑定操作，写入到 etcd
+执行 permit plugin
+执行 prebind plugin
+执行 postbind plugin
+*/
 func (sched *Scheduler) scheduleOne(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	podInfo, err := sched.NextPod()
@@ -86,6 +99,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		logger.Error(err, "Error occurred")
 		return
 	}
+	// 1.判断 pod 是否跳过调度
 	if sched.skipPodSchedule(ctx, fwk, pod) {
 		return
 	}
@@ -93,6 +107,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 	logger.V(3).Info("Attempting to schedule pod", "pod", klog.KObj(pod))
 
 	// Synchronously attempt to find a fit for the pod.
+	// 2.执行调度策略选择 node
 	start := time.Now()
 	state := framework.NewCycleState()
 	state.SetRecordPluginMetrics(rand.Intn(100) < pluginMetricsSamplePercent)

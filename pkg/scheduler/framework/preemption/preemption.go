@@ -444,6 +444,14 @@ func getPodDisruptionBudgets(pdbLister policylisters.PodDisruptionBudgetLister) 
 // 6. If there are still ties, the first such node is picked (sort of randomly).
 // The 'minNodes1' and 'minNodes2' are being reused here to save the memory
 // allocation and garbage collection time.
+/*
+1、PDB violations 值最小的 node
+2、挑选具有高优先级较少的 node
+3、对每个 node 上所有 victims 的优先级进项累加，选取最小的
+4、如果多个 node 优先级总和相等，选择具有最小 victims 数量的 node
+5、如果多个 node 优先级总和相等，选择具有高优先级且 pod 运行时间最短的
+6、如果依据以上策略仍然选出了多个 node 则直接返回第一个 node
+*/
 func pickOneNodeForPreemption(logger klog.Logger, nodesToVictims map[string]*extenderv1.Victims) string {
 	if len(nodesToVictims) == 0 {
 		return ""

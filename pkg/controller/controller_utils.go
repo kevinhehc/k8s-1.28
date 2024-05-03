@@ -57,6 +57,30 @@ import (
 	"k8s.io/klog/v2"
 )
 
+/*
+	SatisfiedExpectations
+	(expectations 中不存在
+	 rsKey，rsNeedsSync
+	 为 true)
+	          |              判断 add/del pod
+	          |                     |
+	          |                     ∨
+	          |             创建 expectations 对象,
+	          |             并设置 add/del 值
+	          ∨                     |
+
+create rs --> syncReplicaSet -->       manageReplicas  -->          ∨
+
+	   (为 rs 创建 pod)       调用 slowStartBatch 批量创建 pod/
+	          |               删除筛选出的多余 pod
+	          |                     |
+	          |                     ∨
+	          |               更新 expectations 对象
+	          ∨
+	updateReplicaSetStatus
+	(更新 rs 的 status
+	subResource)
+*/
 const (
 	// If a watch drops a delete event for a pod, it'll take this long
 	// before a dormant controller waiting for those packets is woken up anyway. It is
@@ -144,14 +168,48 @@ var ExpKeyFunc = func(obj interface{}) (string, error) {
 // Only abstracted out for testing.
 // Warning: if using KeyFunc it is not safe to use a single ControllerExpectationsInterface with different
 // types of controllers, because the keys might conflict across types.
+/*
+在 rs 每次入队后进行 sync 操作时，首先需要判断该 rs 是否满足 expectations 机制，
+那么这个 expectations 的目的是什么？其实，rs 除了有 informer 的缓存外，还有一个本地缓存就是 expectations，
+expectations 会记录 rs 所有对象需要 add/del 的 pod 数量，若两者都为 0 则说明该 rs 所期望创建的 pod 或者删除的 pod 数已经被满足，
+若不满足则说明某次在 syncLoop 中创建或者删除 pod 时有失败的操作，则需要等待 expectations 过期后再次同步该 rs。
+
+通过上面对 eventHandler 的分析，再来总结一下触发 replicaSet 对象发生同步事件的条件：
+
+1、与 rs 相关的：AddRS、UpdateRS、DeleteRS；
+2、与 pod 相关的：AddPod、UpdatePod、DeletePod；
+3、informer 二级缓存的同步；
+但是所有的更新事件是否都需要执行 sync 操作？对于除 rs.Spec.Replicas 之外的更新操作其实都没必要执行 sync 操作，
+因为 spec 其他字段和 status 的更新都不需要创建或者删除 pod。
+
+在 sync 操作真正开始之前，依据 expectations 机制进行判断，确定是否要真正地启动一次 sync，
+因为在 eventHandler 阶段也会更新 expectations 值，从上面的 eventHandler 中可以看到在 addPod 中会调用
+rsc.expectations.CreationObserved 更新 rsKey 的 expectations，将其 add 值 -1，
+在 deletePod 中调用 rsc.expectations.DeletionObserved 将其 del 值 -1。
+所以等到 sync 时，若 controllerKey(name 或者 ns/name)满足 expectations 机制则进行 sync 操作，
+而 updatePod 并不会修改 expectations，所以，expectations 的设计就是当需要创建或删除 pod 才会触发对应的 sync 操作，
+expectations 机制的目的就是减少不必要的 sync 操作。
+
+什么条件下 expectations 机制会满足？
+
+1、当 expectations 中不存在 rsKey 时，也就说首次创建 rs 时；
+2、当 expectations 中 del 以及 add 值都为 0 时，即 rs 所需要创建或者删除的 pod 数都已满足；
+3、当 expectations 过期时，即超过 5 分钟未进行 sync 操作；
+最后再看一下 expectations 中用到的几个方法：
+*/
 type ControllerExpectationsInterface interface {
 	GetExpectations(controllerKey string) (*ControlleeExpectations, bool, error)
 	SatisfiedExpectations(logger klog.Logger, controllerKey string) bool
+	// 删除该 key
 	DeleteExpectations(logger klog.Logger, controllerKey string)
 	SetExpectations(logger klog.Logger, controllerKey string, add, del int) error
+	// 写入 key 需要 add 的 pod 数量
 	ExpectCreations(logger klog.Logger, controllerKey string, adds int) error
+	// 写入 key 需要 del 的 pod 数量
 	ExpectDeletions(logger klog.Logger, controllerKey string, dels int) error
+	// 创建了一个 pod 说明 expectations 中对应的 key add 期望值需要减少一个 pod， add -1
 	CreationObserved(logger klog.Logger, controllerKey string)
+	// 删除了一个 pod 说明 expectations 中对应的 key del 期望值需要减少一个 pod， del - 1
 	DeletionObserved(logger klog.Logger, controllerKey string)
 	RaiseExpectations(logger klog.Logger, controllerKey string, add, del int)
 	LowerExpectations(logger klog.Logger, controllerKey string, add, del int)
@@ -184,7 +242,9 @@ func (r *ControllerExpectations) DeleteExpectations(logger klog.Logger, controll
 // SatisfiedExpectations returns true if the required adds/dels for the given controller have been observed.
 // Add/del counts are established by the controller at sync time, and updated as controllees are observed by the controller
 // manager.
+// 该方法主要判断 rs 是否需要执行真正的同步操作，若需要 add/del pod 或者 expectations 已过期则需要进行同步操作。
 func (r *ControllerExpectations) SatisfiedExpectations(logger klog.Logger, controllerKey string) bool {
+	// 1、若该 key 存在时，判断是否满足条件或者是否超过同步周期
 	if exp, exists, err := r.GetExpectations(controllerKey); exists {
 		if exp.Fulfilled() {
 			logger.V(4).Info("Controller expectations fulfilled", "expectations", exp)
@@ -214,6 +274,7 @@ func (r *ControllerExpectations) SatisfiedExpectations(logger klog.Logger, contr
 // TODO: Extend ExpirationCache to support explicit expiration.
 // TODO: Make this possible to disable in tests.
 // TODO: Support injection of clock.
+// 4、判断 key 是否过期，ExpectationsTimeout 默认值为 5 * time.Minute
 func (exp *ControlleeExpectations) isExpired() bool {
 	return clock.RealClock{}.Since(exp.timestamp) > ExpectationsTimeout
 }
@@ -278,6 +339,7 @@ func (e *ControlleeExpectations) Add(add, del int64) {
 }
 
 // Fulfilled returns true if this expectation has been fulfilled.
+// 3、若 add <= 0 且 del <= 0 说明本地观察到的状态已经为期望状态了
 func (e *ControlleeExpectations) Fulfilled() bool {
 	// TODO: think about why this line being atomic doesn't matter
 	return atomic.LoadInt64(&e.add) <= 0 && atomic.LoadInt64(&e.del) <= 0

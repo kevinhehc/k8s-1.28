@@ -68,6 +68,10 @@ func startStatefulSetController(ctx context.Context, controllerContext Controlle
 	return nil, true, nil
 }
 
+/*
+BurstReplicas：用来控制在一个 syncLoop 过程中 rs 最多能创建的 pod 数量，设置上限值是为了避免单个 rs 影响整个系统，默认值为 500；
+ConcurrentRSSyncs：指的是需要启动多少个 goroutine 处理 informer 队列中的对象，默认值为 5
+*/
 func startReplicaSetController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
 	go replicaset.NewReplicaSetController(
 		klog.FromContext(ctx),

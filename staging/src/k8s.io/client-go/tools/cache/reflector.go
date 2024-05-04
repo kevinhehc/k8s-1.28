@@ -62,19 +62,19 @@ type Reflector struct {
 	// Only the type needs to be right, except that when that is
 	// `unstructured.Unstructured` the object's `"apiVersion"` and
 	// `"kind"` must also be right.
-	// 期望放入缓存store的资源类型
+	//  期望放入缓存store的资源类型
 	expectedType reflect.Type
 	// The GVK of the object we expect to place in the store if unstructured.
 	expectedGVK *schema.GroupVersionKind
 	// The destination to sync up with the watch source
-	// 存放同步监听到的资源，这里是DeltaFIFO类
+	//  存放同步监听到的资源，这里是DeltaFIFO类
 	store Store
 	// listerWatcher is used to perform lists and watches.
-	// 用来执行List和Watch的对象
+	//  用来执行List和Watch的对象
 	listerWatcher ListerWatcher
 	// backoff manages backoff of ListWatch
 	backoffManager wait.BackoffManager
-	// resync周期
+	//  resync周期
 	resyncPeriod time.Duration
 	// clock allows tests to manipulate time
 	clock clock.Clock
@@ -84,12 +84,13 @@ type Reflector struct {
 	// lastSyncResourceVersion is the resource version token last
 	// observed when doing a sync with the underlying store
 	// it is thread safe, but not synchronized with the underlying store
-	// 最新一次看到的资源版本号
+	//  最新一次看到的资源版本号
 	lastSyncResourceVersion string
 	// isLastSyncResourceVersionUnavailable is true if the previous list or watch request with
 	// lastSyncResourceVersion failed with an "expired" or "too large resource version" error.
 	isLastSyncResourceVersionUnavailable bool
 	// lastSyncResourceVersionMutex guards read/write access to lastSyncResourceVersion
+	// 用于resourceversion的锁
 	lastSyncResourceVersionMutex sync.RWMutex
 	// Called whenever the ListAndWatch drops the connection with an error.
 	watchErrorHandler WatchErrorHandler
@@ -328,7 +329,10 @@ func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
 // ListAndWatch first lists all items and get the resource version at the moment of call,
 // and then use the resource version to watch.
 // It returns error if ListAndWatch didn't even try to initialize watch.
-// ListAndWatch函数
+//
+//	ListAndWatch函数
+//
+// important!!!
 func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 	klog.V(3).Infof("Listing and watching %v from %s", r.typeDescription, r.name)
 	var err error
@@ -496,7 +500,7 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 		}()
 		// Attempt to gather list in chunks, if supported by listerWatcher, if not, the first
 		// list request will return the full response.
-		// 调用List方法获取资源对象下所有的数据
+		//  调用List方法获取资源对象下所有的数据
 		pager := pager.New(pager.SimplePageFunc(func(opts metav1.ListOptions) (runtime.Object, error) {
 			return r.listerWatcher.List(opts)
 		}))
@@ -568,18 +572,18 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 	if err != nil {
 		return fmt.Errorf("unable to understand list result %#v: %v", list, err)
 	}
-	// 获取资源版本号
+	//  获取资源版本号
 	resourceVersion = listMetaInterface.GetResourceVersion()
 	initTrace.Step("Resource version extracted")
-	// 将资源数据转换为资源对象列表
+	//  将资源数据转换为资源对象列表
 	items, err := meta.ExtractListWithAlloc(list)
 	if err != nil {
 		return fmt.Errorf("unable to understand list result %#v (%v)", list, err)
 	}
 	initTrace.Step("Objects extracted")
-	// 通过 resourceVersion 解决并发的问题
-	// 将资源信息存储到DeltaFIFO中，全量替换本地缓存
-	// 内部调用了replace方法
+	//  通过 resourceVersion 解决并发的问题
+	//  将资源信息存储到DeltaFIFO中，全量替换本地缓存
+	//  内部调用了replace方法
 	if err := r.syncWith(items, resourceVersion); err != nil {
 		return fmt.Errorf("unable to sync list result: %v", err)
 	}

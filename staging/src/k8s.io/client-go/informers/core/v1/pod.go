@@ -57,20 +57,20 @@ func NewPodInformer(client kubernetes.Interface, namespace string, resyncPeriod 
 // one. This reduces memory footprint and number of connections to the server.
 func NewFilteredPodInformer(client kubernetes.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
-		// 注册List、Watch方法
+		//  注册List、Watch方法
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				// List方法是该种资源对象的List方法（这里是pod）
+				//  List方法是该种资源对象的List方法（这里是pod）
 				return client.CoreV1().Pods(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				// Watch方法是该种资源对象的Watch方法（这里是pod）
+				//  Watch方法是该种资源对象的Watch方法（这里是pod）
 				return client.CoreV1().Pods(namespace).Watch(context.TODO(), options)
 			},
 		},

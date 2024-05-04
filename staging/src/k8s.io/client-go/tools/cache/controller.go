@@ -157,7 +157,7 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 	// hhc1 todo
 	var wg wait.Group
 
-	// 调用Reflector的Run方法，启动监控，并处理监控事件
+	//  调用Reflector的Run方法，启动监控，并处理监控事件
 	// hhc1 todo
 	wg.StartWithChannel(stopCh, r.Run)
 
@@ -455,14 +455,14 @@ func processDeltas(
 		obj := d.Object
 
 		switch d.Type {
-		// 如果是下列类型，将资源存储到Indexer
+		//  如果是下列类型，将资源存储到Indexer
 		case Sync, Replaced, Added, Updated:
 			if old, exists, err := clientState.Get(obj); err == nil && exists {
 				if err := clientState.Update(obj); err != nil {
 					return err
 				}
-				// 将资源对象分发至 SharedInformer 的事件处理函数中
-				// isSync从里面计算
+				//  将资源对象分发至 SharedInformer 的事件处理函数中
+				//  isSync从里面计算
 				handler.OnUpdate(old, obj)
 			} else {
 				if err := clientState.Add(obj); err != nil {
@@ -475,7 +475,7 @@ func processDeltas(
 			if err := clientState.Delete(obj); err != nil {
 				return err
 			}
-			// 将资源对象分发至 SharedInformer 的事件处理函数中
+			//  将资源对象分发至 SharedInformer 的事件处理函数中
 			handler.OnDelete(obj)
 		}
 	}

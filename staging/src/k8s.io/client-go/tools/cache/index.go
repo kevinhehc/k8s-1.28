@@ -92,12 +92,14 @@ func MetaNamespaceIndexFunc(obj interface{}) ([]string, error) {
 }
 
 // Index maps the indexed value to a set of keys in the store that match on that value
-// Index将索引值映射到存储区中与该值匹配的一组键
+//
+//	Index将索引值映射到存储区中与该值匹配的一组键
 type Index map[string]sets.String
 
 // Indexers maps a name to an IndexFunc
 type Indexers map[string]IndexFunc
 
 // Indices maps a name to an Index
-// 目录
+//
+//	目录
 type Indices map[string]Index

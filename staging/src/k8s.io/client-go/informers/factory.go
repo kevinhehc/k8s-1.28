@@ -176,7 +176,7 @@ func (f *sharedInformerFactory) Shutdown() {
 }
 
 // 启动所有注册的informers, 那什么时候注册的呢?
-//在factory.Core().V1().Pods().Informer()的时候如果没有的时候会生成一个并放到f.informers中.
+// 在factory.Core().V1().Pods().Informer()的时候如果没有的时候会生成一个并放到f.informers中.
 func (f *sharedInformerFactory) WaitForCacheSync(stopCh <-chan struct{}) map[reflect.Type]bool {
 	informers := func() map[reflect.Type]cache.SharedIndexInformer {
 		f.lock.Lock()

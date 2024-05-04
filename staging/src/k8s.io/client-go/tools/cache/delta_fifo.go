@@ -105,13 +105,13 @@ type DeltaFIFO struct {
 
 	// `items` maps a key to a Deltas.
 	// Each such Deltas has at least one Delta.
-	// items是一个map，其中的每个key对应着一个Deltas队列。
+	//  items是一个map，其中的每个key对应着一个Deltas队列。
 	items map[string]Deltas
 
 	// `queue` maintains FIFO order of keys for consumption in Pop().
 	// There are no duplicates in `queue`.
 	// A key is in `queue` if and only if it is in `items`.
-	// Queue是一个包含了所有key的数组。
+	//  Queue是一个包含了所有key的数组。
 	queue []string
 
 	// populated is true if the first batch of items inserted by Replace() has been populated
@@ -126,7 +126,7 @@ type DeltaFIFO struct {
 
 	// knownObjects list keys that are "known" --- affecting Delete(),
 	// Replace(), and Resync()
-	// Index本地存储对象
+	//  Index本地存储对象
 	knownObjects KeyListerGetter
 
 	// Used to indicate a queue is closed so a control loop can exit when a queue is empty.
@@ -321,7 +321,8 @@ func (f *DeltaFIFO) Add(obj interface{}) error {
 }
 
 // Update is just like Add, but makes an Updated Delta.
-// 数据更新，最终调用queueActionLocked
+//
+//	数据更新，最终调用queueActionLocked
 func (f *DeltaFIFO) Update(obj interface{}) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -334,7 +335,8 @@ func (f *DeltaFIFO) Update(obj interface{}) error {
 // already been deleted by a Replace (re-list), for example.)  In this
 // method `f.knownObjects`, if not nil, provides (via GetByKey)
 // _additional_ objects that are considered to already exist.
-// 数据删除，最终调用queueActionLocked
+//
+//	数据删除，最终调用queueActionLocked
 func (f *DeltaFIFO) Delete(obj interface{}) error {
 	id, err := f.KeyOf(obj)
 	if err != nil {
@@ -408,13 +410,13 @@ func (f *DeltaFIFO) addIfNotPresent(id string, deltas Deltas) {
 // order. This will combine the most recent two deltas if they are the same.
 func dedupDeltas(deltas Deltas) Deltas {
 	n := len(deltas)
-	// 少于2个也就是得一个，不需要合并了，直接返回
+	//  少于2个也就是得一个，不需要合并了，直接返回
 	if n < 2 {
 		return deltas
 	}
 	a := &deltas[n-1]
 	b := &deltas[n-2]
-	// 这里，最后调了isDeletionDup，这个是判断一个资源对象的两次操作是否都是删除，如果是，就去重，不需要删除两次
+	//  这里，最后调了isDeletionDup，这个是判断一个资源对象的两次操作是否都是删除，如果是，就去重，不需要删除两次
 	if out := isDup(a, b); out != nil {
 		deltas[n-2] = *out
 		return deltas[:n-1]
@@ -447,9 +449,10 @@ func isDeletionDup(a, b *Delta) *Delta {
 
 // queueActionLocked appends to the delta list for the object.
 // Caller must lock first.
-// 内部主要是封装Delta事件，并加入队列，供消费者消费（HandleDeltas函数）
+//
+//	内部主要是封装Delta事件，并加入队列，供消费者消费（HandleDeltas函数）
 func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) error {
-	// 根据资源对象，得到key，一般是 namespace/name 格式
+	//  根据资源对象，得到key，一般是 namespace/name 格式
 	id, err := f.KeyOf(obj)
 	if err != nil {
 		return KeyError{obj, err}
@@ -470,12 +473,12 @@ func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) err
 	}
 
 	oldDeltas := f.items[id]
-	// 把同一个对象的不同的actionType，都添加到newDeltas列表中
+	//  把同一个对象的不同的actionType，都添加到newDeltas列表中
 	newDeltas := append(oldDeltas, Delta{actionType, obj})
-	// 合并去重
+	//  合并去重
 	newDeltas = dedupDeltas(newDeltas)
 
-	// 我一开始理解不了，觉得不可能存在<=0的情况，最新的Kubernetes的代码里面注释说了，正常情况下不会出现<=0， 加这个判断属于冗余判断
+	//  我一开始理解不了，觉得不可能存在<=0的情况，最新的Kubernetes的代码里面注释说了，正常情况下不会出现<=0， 加这个判断属于冗余判断
 	if len(newDeltas) > 0 {
 		if _, exists := f.items[id]; !exists {
 			f.queue = append(f.queue, id)
@@ -581,7 +584,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 			// When the queue is empty, invocation of Pop() is blocked until new item is enqueued.
 			// When Close() is called, the f.closed is set and the condition is broadcasted.
 			// Which causes this loop to continue and return from the Pop().
-			// 任何时候判断队列是否被关闭之前，都需要先判断队列的长度，看上方的len
+			//  任何时候判断队列是否被关闭之前，都需要先判断队列的长度，看上方的len
 			if f.closed {
 				return nil, ErrFIFOClosed
 			}
@@ -590,7 +593,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 		}
 		isInInitialList := !f.hasSynced_locked()
 		id := f.queue[0]
-		// 取出第一个f.queue[0]对象，从队列删除，将该对象交给process处理对象
+		//  取出第一个f.queue[0]对象，从队列删除，将该对象交给process处理对象
 		f.queue = f.queue[1:]
 		depth := len(f.queue)
 		if f.initialPopulationCount > 0 {
@@ -615,7 +618,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 				utiltrace.Field{Key: "Reason", Value: "slow event handlers blocking the queue"})
 			defer trace.LogIfLong(100 * time.Millisecond)
 		}
-		// 将数据交给上层回调函数处理
+		//  将数据交给上层回调函数处理
 		err := process(item, isInInitialList)
 		if e, ok := err.(ErrRequeue); ok {
 			// 处理失败，就重新入队
@@ -721,8 +724,9 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 // Resync adds, with a Sync type of Delta, every object listed by
 // `f.knownObjects` whose key is not already queued for processing.
 // If `f.knownObjects` is `nil` then Resync does nothing.
-// 重新同步一次 Indexer 缓存数据到 Delta FIFO 队列中
-// RSync负责将Indexer本地存储的资源对象同步到DeltaFIFO中，并设置资源类型为Sync类型。在Reflector中定时执行
+//
+//	重新同步一次 Indexer 缓存数据到 Delta FIFO 队列中
+//	RSync负责将Indexer本地存储的资源对象同步到DeltaFIFO中，并设置资源类型为Sync类型。在Reflector中定时执行
 func (f *DeltaFIFO) Resync() error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -755,8 +759,8 @@ func (f *DeltaFIFO) syncKeyLocked(key string) error {
 	// we ignore the Resync for it. This is to avoid the race, in which the resync
 	// comes with the previous value of object (since queueing an event for the object
 	// doesn't trigger changing the underlying store <knownObjects>.
-	// 如果发现 FIFO 队列中已经有相同 key 的 event 进来了，说明该资源对象有了新的 event，
-	// 在 Indexer 中旧的缓存应该失效，因此不做 Resync 处理直接返回 nil
+	//  如果发现 FIFO 队列中已经有相同 key 的 event 进来了，说明该资源对象有了新的 event，
+	//  在 Indexer 中旧的缓存应该失效，因此不做 Resync 处理直接返回 nil
 	id, err := f.KeyOf(obj)
 	if err != nil {
 		return KeyError{obj, err}

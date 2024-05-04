@@ -42,6 +42,7 @@ type APIHandlerManager interface {
 }
 
 // APIServiceRegistrationController is responsible for registering and removing API services.
+// 负责 APIServices 中资源的注册与删除；
 type APIServiceRegistrationController struct {
 	apiHandlerManager APIHandlerManager
 

@@ -420,6 +420,7 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
 		}()
 	}
 
+	// BeforeCreate把creation之前的通用操作完成。会调用PrepareForCreate，GenerateName，Validate
 	if err := rest.BeforeCreate(e.CreateStrategy, ctx, obj); err != nil {
 		return nil, err
 	}
@@ -431,10 +432,12 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
 		}
 	}
 
+	// 获取对象的名字
 	name, err := e.ObjectNameFunc(obj)
 	if err != nil {
 		return nil, err
 	}
+	// 获取KEY
 	key, err := e.KeyFunc(ctx, name)
 	if err != nil {
 		return nil, err
@@ -444,7 +447,9 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
 	if err != nil {
 		return nil, err
 	}
+	// 生成一个空的对象，而对于PodStorage的store的创建中，我们已经知道，它实际是生成一个Pod对象
 	out := e.NewFunc()
+	// 这里用到Storage，也分析过，最终会调用Etcd，并且在这里会调用runtime.Codec完成从对象到字符串的转换，最终保存到etcd中。
 	if err := e.Storage.Create(ctx, key, obj, out, ttl, dryrun.IsDryRun(options.DryRun)); err != nil {
 		err = storeerr.InterpretCreateError(err, qualifiedResource, name)
 		err = rest.CheckGeneratedNameError(ctx, e.CreateStrategy, err, obj)
@@ -1407,7 +1412,7 @@ func (e *Store) calculateTTL(obj runtime.Object, defaultTTL int64, update bool) 
 
 // CompleteWithOptions updates the store with the provided options and
 // defaults common fields.
-// 主要功能是为 store 中的配置设置一些默认的值以及根据提供的 options 更新 store，其中最主要的就是初始化 store 的后端存储实例
+// 其会依次调用StorageWithCacher-->NewRawStorage-->Create方法创建最终依赖的后端存储。
 func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 	if e.DefaultQualifiedResource.Empty() {
 		return fmt.Errorf("store %#v must have a non-empty qualified resource", e)
@@ -1473,14 +1478,14 @@ func (e *Store) CompleteWithOptions(options *generic.StoreOptions) error {
 		return err
 	}
 
-	// 1、调用 options.RESTOptions.GetRESTOptions
+	// 在PodStorage的初始化中，DefaultQualifiedResource为api.Resource("pods")
 	opts, err := options.RESTOptions.GetRESTOptions(e.DefaultQualifiedResource)
 	if err != nil {
 		return err
 	}
 
 	// ResourcePrefix must come from the underlying factory
-	// 2、设置 ResourcePrefix
+	// 设置 ResourcePrefix
 	prefix := opts.ResourcePrefix
 	if !strings.HasPrefix(prefix, "/") {
 		prefix = "/" + prefix

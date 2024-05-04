@@ -41,11 +41,15 @@ type StorageCodecConfig struct {
 // NewStorageCodec assembles a storage codec for the provided storage media type, the provided serializer, and the requested
 // storage and memory versions.
 func NewStorageCodec(opts StorageCodecConfig) (runtime.Codec, runtime.GroupVersioner, error) {
+	// 这里一般为: application/json的话，返回的mediaType 也是application/json
 	mediaType, _, err := mime.ParseMediaType(opts.StorageMediaType)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%q is not a valid mime-type", opts.StorageMediaType)
 	}
 
+	// 寻找对应的媒介类型的序列化实例，如果找不到，系统会报错
+	// 注意：在前面分析DefaultStorageFactory.NewConfig中，
+	// 知道opts.StorageSerializer = DefaultStorageFactory.DefaultSerializer = legacyscheme.Codecs
 	supportedMediaTypes := opts.StorageSerializer.SupportedMediaTypes()
 	serializer, ok := runtime.SerializerInfoForMediaType(supportedMediaTypes, mediaType)
 	if !ok {
@@ -79,6 +83,7 @@ func NewStorageCodec(opts StorageCodecConfig) (runtime.Codec, runtime.GroupVersi
 		decoders = opts.DecoderDecoratorFn(decoders)
 	}
 
+	// 构建一个GroupVersioner，该GroupVersioner接受StorageVersion.Group和MemoryVersion.Group，返回对应StorageVersion的GVK。
 	encodeVersioner := runtime.NewMultiGroupVersioner(
 		opts.StorageVersion,
 		schema.GroupKind{Group: opts.StorageVersion.Group},
@@ -86,12 +91,15 @@ func NewStorageCodec(opts StorageCodecConfig) (runtime.Codec, runtime.GroupVersi
 	)
 
 	// Ensure the storage receives the correct version.
+	// 注意之类的opts.StorageSerializer = legacyscheme.Codecs，实际结构为CodecFactory
 	encoder = opts.StorageSerializer.EncoderForVersion(
 		encoder,
 		encodeVersioner,
 	)
 	decoder := opts.StorageSerializer.DecoderToVersion(
 		recognizer.NewDecoder(decoders...),
+		// 构建一个GroupVersioner，该GroupVersioner接受MemoryVersion.Group和StorageVersion.Group，
+		//返回对应MemoryVersion的GVK。
 		runtime.NewCoercingMultiGroupVersioner(
 			opts.MemoryVersion,
 			schema.GroupKind{Group: opts.MemoryVersion.Group},

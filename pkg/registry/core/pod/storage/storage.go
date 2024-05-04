@@ -77,6 +77,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 		DefaultQualifiedResource:  api.Resource("pods"),
 		SingularQualifiedResource: api.Resource("pod"),
 
+		// 创建、更新Pod时执行的缺省逻辑，具体的类型为podStrategy
 		CreateStrategy:      registrypod.Strategy,
 		UpdateStrategy:      registrypod.Strategy,
 		DeleteStrategy:      registrypod.Strategy,

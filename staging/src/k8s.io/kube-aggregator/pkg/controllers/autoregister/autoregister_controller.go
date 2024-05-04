@@ -63,6 +63,7 @@ type AutoAPIServiceRegistration interface {
 
 // autoRegisterController is used to keep a particular set of APIServices present in the API.  It is useful
 // for cases where you want to auto-register APIs like TPRs or groups from the core kube-apiserver
+// 用于保持 API 中存在的一组特定的 APIServices；
 type autoRegisterController struct {
 	apiServiceLister listers.APIServiceLister
 	apiServiceSynced cache.InformerSynced

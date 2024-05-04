@@ -184,6 +184,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 		attribute.String("resource", s.groupResourceString),
 	)
 	defer span.End(500 * time.Millisecond)
+	// version不能被设置
 	if version, err := s.versioner.ObjectResourceVersion(obj); err == nil && version != 0 {
 		return errors.New("resourceVersion should not be set on objects to be created")
 	}
@@ -191,6 +192,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 		return fmt.Errorf("PrepareObjectForStorage failed: %v", err)
 	}
 	span.AddEvent("About to Encode")
+	// 序列化，这里应该是编码为json字符串
 	data, err := runtime.Encode(s.codec, obj)
 	if err != nil {
 		span.AddEvent("Encode failed", attribute.Int("len", len(data)), attribute.String("err", err.Error()))
@@ -203,6 +205,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 		return err
 	}
 
+	// 按需做存储之前的数据转换
 	newData, err := s.transformer.TransformToStorage(ctx, data, authenticatedDataString(preparedKey))
 	if err != nil {
 		span.AddEvent("TransformToStorage failed", attribute.String("err", err.Error()))
@@ -211,6 +214,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	span.AddEvent("TransformToStorage succeeded")
 
 	startTime := time.Now()
+	// 基于etcd3的api，写入数据
 	txnResp, err := s.client.KV.Txn(ctx).If(
 		notFound(preparedKey),
 	).Then(

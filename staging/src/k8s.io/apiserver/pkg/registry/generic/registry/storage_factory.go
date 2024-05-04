@@ -44,6 +44,7 @@ func StorageWithCacher() generic.StorageDecorator {
 		triggerFuncs storage.IndexerFuncs,
 		indexers *cache.Indexers) (storage.Interface, factory.DestroyFunc, error) {
 
+		// 创建一个裸的ETCD存储接口实例
 		s, d, err := generic.NewRawStorage(storageConfig, newFunc)
 		if err != nil {
 			return s, d, err

@@ -76,12 +76,14 @@ var storageTypes = sets.NewString(
 
 func NewEtcdOptions(backendConfig *storagebackend.Config) *EtcdOptions {
 	options := &EtcdOptions{
-		StorageConfig:           *backendConfig,
+		StorageConfig: *backendConfig,
+		// 缺省的存储类型
 		DefaultStorageMediaType: "application/json",
 		DeleteCollectionWorkers: 1,
 		EnableGarbageCollection: true,
-		EnableWatchCache:        true,
-		DefaultWatchCacheSize:   100,
+		// 缺省是带了WatchCache的，要取消，必须设置参数为--watch-cache=false 来取消
+		EnableWatchCache:      true,
+		DefaultWatchCacheSize: 100,
 	}
 	options.StorageConfig.CountMetricPollPeriod = time.Minute
 	return options

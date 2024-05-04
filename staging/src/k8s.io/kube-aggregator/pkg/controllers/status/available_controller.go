@@ -60,6 +60,7 @@ type ServiceResolver interface {
 }
 
 // AvailableConditionController handles checking the availability of registered API services.
+// 维护 APIServices 的可用状态，包括其引用 Service 是否可用等；
 type AvailableConditionController struct {
 	apiServiceClient apiregistrationclient.APIServicesGetter
 

@@ -45,6 +45,7 @@ const (
 
 // AggregationController periodically check for changes in OpenAPI specs of APIServices and update/remove
 // them if necessary.
+// 将 APIServices 资源的变化同步至提供的 OpenAPI 文档；
 type AggregationController struct {
 	openAPIAggregationManager aggregator.SpecAggregator
 	queue                     workqueue.RateLimitingInterface

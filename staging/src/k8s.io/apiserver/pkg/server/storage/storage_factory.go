@@ -74,17 +74,22 @@ type DefaultStorageFactory struct {
 	DefaultResourcePrefixes map[schema.GroupResource]string
 
 	// DefaultMediaType is the media type used to store resources. If it is not set, "application/json" is used.
+	// 从EtcdOptions参数中传入的，缺省为 application/json，见NewEtcdOptions方法
 	DefaultMediaType string
 
 	// DefaultSerializer is used to create encoders and decoders for the storage.Interface.
+	// 具体的值：legacyscheme.Codecs
 	DefaultSerializer runtime.StorageSerializer
 
 	// ResourceEncodingConfig describes how to encode a particular GroupVersionResource
+	// 资源编码配置情况，并不是所有的资源都按照指定的Group来存放，有些特例。
+	//另外也可以指定存储在不同etcd、不同的prefix、甚至于不同的编码存储。
 	ResourceEncodingConfig ResourceEncodingConfig
 
 	// APIResourceConfigSource indicates whether the *storage* is enabled, NOT the API
 	// This is discrete from resource enablement because those are separate concerns.  How this source is configured
 	// is left to the caller.
+	//  启用的资源版本的API情况
 	APIResourceConfigSource APIResourceConfigSource
 
 	// newStorageCodecFn exists to be overwritten for unit testing.
@@ -161,14 +166,21 @@ func NewDefaultStorageFactory(
 		defaultMediaType = runtime.ContentTypeJSON
 	}
 	return &DefaultStorageFactory{
-		StorageConfig:           config,
-		Overrides:               map[schema.GroupResource]groupResourceOverrides{},
-		DefaultMediaType:        defaultMediaType,
-		DefaultSerializer:       defaultSerializer,
-		ResourceEncodingConfig:  resourceEncodingConfig,
+		// 描述了如何创建到底层存储的连接，包含了各种存储接口storage.Interface实现的认证信息。
+		StorageConfig: config,
+		// 特殊资源处理
+		Overrides: map[schema.GroupResource]groupResourceOverrides{},
+		// 缺省存储媒介类型，application/json
+		DefaultMediaType: defaultMediaType,
+		// 缺省序列化实例，legacyscheme.Codecs
+		DefaultSerializer: defaultSerializer,
+		// 资源编码配置
+		ResourceEncodingConfig: resourceEncodingConfig,
+		// API启用的资源版本
 		APIResourceConfigSource: resourceConfig,
+		// 特殊资源prefix
 		DefaultResourcePrefixes: specialDefaultResourcePrefixes,
-
+		// 为提供的存储媒介类型、序列化和请求的存储与内存版本组装一个存储codec
 		newStorageCodecFn: NewStorageCodec,
 	}
 }
@@ -243,12 +255,14 @@ func (s *DefaultStorageFactory) getStorageGroupResource(groupResource schema.Gro
 // New finds the storage destination for the given group and resource. It will
 // return an error if the group has no storage destination configured.
 func (s *DefaultStorageFactory) NewConfig(groupResource schema.GroupResource) (*storagebackend.ConfigForResource, error) {
+	// 查看是否有共生的资源，如果没有就返回自己
 	chosenStorageResource := s.getStorageGroupResource(groupResource)
 
 	// operate on copy
 	storageConfig := s.StorageConfig
 	codecConfig := StorageCodecConfig{
-		StorageMediaType:  s.DefaultMediaType,
+		StorageMediaType: s.DefaultMediaType,
+		// 这里传入的实际值为legacyscheme.Codecs
 		StorageSerializer: s.DefaultSerializer,
 	}
 
@@ -259,6 +273,10 @@ func (s *DefaultStorageFactory) NewConfig(groupResource schema.GroupResource) (*
 		override.Apply(&storageConfig, &codecConfig)
 	}
 
+	// ResourceEncodingConfig相关内容。
+	// 分为缺省的，以及Override的逻辑，
+	// 资源变量中包含Internal、External两种，Internal是内存数据对应的GroupVersion，External则是底层存储的GroupVersion
+	// 如果找不到的情况下， 一般我们会给内存数据这个缺省定义版本：APIVersionInternal = "__internal"
 	var err error
 	codecConfig.StorageVersion, err = s.ResourceEncodingConfig.StorageEncodingFor(chosenStorageResource)
 	if err != nil {
@@ -269,7 +287,7 @@ func (s *DefaultStorageFactory) NewConfig(groupResource schema.GroupResource) (*
 		return nil, err
 	}
 	codecConfig.Config = storageConfig
-
+	// 这里的newStorageCodecFn为 storage.NewStorageCodec，见NewDefaultStorageFactory
 	storageConfig.Codec, storageConfig.EncodeVersioner, err = s.newStorageCodecFn(codecConfig)
 	if err != nil {
 		return nil, err

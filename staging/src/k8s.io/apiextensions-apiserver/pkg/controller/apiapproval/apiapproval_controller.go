@@ -37,6 +37,7 @@ import (
 )
 
 // KubernetesAPIApprovalPolicyConformantConditionController is maintaining the KubernetesAPIApprovalPolicyConformant condition.
+// 检查 crd 是否遵循 kubernetes API 声明策略
 type KubernetesAPIApprovalPolicyConformantConditionController struct {
 	crdClient client.CustomResourceDefinitionsGetter
 

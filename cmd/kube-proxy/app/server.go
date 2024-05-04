@@ -358,14 +358,17 @@ func (o *Options) Validate() error {
 // Run runs the specified ProxyServer.
 func (o *Options) Run() error {
 	defer close(o.errCh)
+	// 1.如果指定了 --write-config-to 参数，则将默认的配置文件写到指定文件并退出
 	if len(o.WriteConfigTo) > 0 {
 		return o.writeConfigFile()
 	}
 
+	// 2.如果启动参数 --cleanup 设置为 true，则清理 iptables 和 ipvs 规则并退出
 	if o.CleanupAndExit {
 		return cleanupAndExit()
 	}
 
+	// 3.初始化 ProxyServer 对象
 	proxyServer, err := newProxyServer(o.config, o.master)
 	if err != nil {
 		return err
@@ -378,11 +381,13 @@ func (o *Options) Run() error {
 // runLoop will watch on the update change of the proxy server's configuration file.
 // Return an error when updated
 func (o *Options) runLoop() error {
+	// 1.watch 配置文件变化
 	if o.watcher != nil {
 		o.watcher.Run()
 	}
 
 	// run the proxy in goroutine
+	// 2.以 goroutine 方式启动 proxyServer
 	go func() {
 		err := o.proxyServer.Run()
 		o.errCh <- err
@@ -579,6 +584,13 @@ type ProxyServer struct {
 }
 
 // newProxyServer creates a ProxyServer based on the given config
+/*
+初始化 iptables、ipvs 相关的 interface
+若启用了 ipvs 则检查内核版本、ipvs 依赖的内核模块、ipset 版本，
+内核模块主要包括：ip_vs，ip_vs_rr,ip_vs_wrr,ip_vs_sh,nf_conntrack_ipv4,nf_conntrack，
+若没有相关模块，kube-proxy 会尝试使用 modprobe 自动加载
+根据 proxyMode 初始化 proxier，kube-proxy 启动后只运行一种 proxier
+*/
 func newProxyServer(config *kubeproxyconfig.KubeProxyConfiguration, master string) (*ProxyServer, error) {
 	s := &ProxyServer{Config: config}
 
@@ -841,6 +853,14 @@ func serveMetrics(bindAddress string, proxyMode kubeproxyconfig.ProxyMode, enabl
 
 // Run runs the specified ProxyServer.  This should never exit (unless CleanupAndExit is set).
 // TODO: At the moment, Run() cannot return a nil error, otherwise it's caller will never exit. Update callers of Run to handle nil errors.
+/*
+设定进程 OOMScore，可通过命令行配置，默认值为 --oom-score-adj="-999"
+启动 metric server 和 healthz server，两者分别监听 10256 和 10249 端口
+设置内核参数 nf_conntrack_tcp_timeout_established 和 nf_conntrack_tcp_timeout_close_wait
+将 proxier 注册到 serviceEventHandler、endpointsEventHandler 中
+启动 informer 监听 service 和 endpoints 变化
+执行 s.Proxier.SyncLoop()，启动 proxier 主循环
+*/
 func (s *ProxyServer) Run() error {
 	// To help debugging, immediately log version
 	klog.InfoS("Version info", "version", version.Get())
@@ -848,6 +868,7 @@ func (s *ProxyServer) Run() error {
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
 
 	// TODO(vmarmol): Use container config for this.
+	// 1.进程 OOMScore，避免进程因 oom 被杀掉，此处默认值为 -999
 	var oomAdjuster *oom.OOMAdjuster
 	if s.Config.OOMScoreAdj != nil {
 		oomAdjuster = oom.NewOOMAdjuster()
@@ -869,9 +890,11 @@ func (s *ProxyServer) Run() error {
 	}
 
 	// Start up a healthz server if requested
+	// 2.启动 healthz server
 	serveHealthz(s.HealthzServer, errCh)
 
 	// Start up a metrics server if requested
+	// 3.启动 metrics server
 	serveMetrics(s.Config.MetricsBindAddress, s.Config.Mode, s.Config.EnableProfiling, errCh)
 
 	noProxyName, err := labels.NewRequirement(apis.LabelServiceProxyName, selection.DoesNotExist, nil)
@@ -888,6 +911,7 @@ func (s *ProxyServer) Run() error {
 	labelSelector = labelSelector.Add(*noProxyName, *noHeadlessEndpoints)
 
 	// Make informers that filter out objects that want a non-default service proxy.
+	// 5.启动 informer 监听 Services 和 Endpoints 或者 EndpointSlices 信息
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.Config.ConfigSyncPeriod.Duration,
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = labelSelector.String()
@@ -897,6 +921,7 @@ func (s *ProxyServer) Run() error {
 	// Note: RegisterHandler() calls need to happen before creation of Sources because sources
 	// only notify on changes, and the initial update (on process start) may be lost if no handlers
 	// are registered yet.
+	// 6.将 proxier 注册到 serviceConfig、endpointsConfig 中
 	serviceConfig := config.NewServiceConfig(informerFactory.Core().V1().Services(), s.Config.ConfigSyncPeriod.Duration)
 	serviceConfig.RegisterEventHandler(s.Proxier)
 	go serviceConfig.Run(wait.NeverStop)
@@ -907,6 +932,7 @@ func (s *ProxyServer) Run() error {
 
 	// This has to start after the calls to NewServiceConfig because that
 	// function must configure its shared informer event handlers first.
+	// 7.启动 informer
 	informerFactory.Start(wait.NeverStop)
 
 	// Make an informer that selects for our nodename.
@@ -935,6 +961,7 @@ func (s *ProxyServer) Run() error {
 	// Birth Cry after the birth is successful
 	s.birthCry()
 
+	// 8.启动 proxier 主循环
 	go s.Proxier.SyncLoop()
 
 	return <-errCh

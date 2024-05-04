@@ -249,6 +249,7 @@ func NewProxier(ipFamily v1.IPFamily,
 		// Set the route_localnet sysctl we need for exposing NodePorts on loopback addresses
 		// Refer to https://issues.k8s.io/90259
 		klog.InfoS("Setting route_localnet=1 to allow node-ports on localhost; to change this either disable iptables.localhostNodePorts (--iptables-localhost-nodeports) or set nodePortAddresses (--nodeport-addresses) to filter loopback addresses")
+		// 1.设置相关的内核参数
 		if err := proxyutil.EnsureSysctl(sysctl, sysctlRouteLocalnet, 1); err != nil {
 			return nil, err
 		}
@@ -262,12 +263,16 @@ func NewProxier(ipFamily v1.IPFamily,
 	}
 
 	// Generate the masquerade mark to use for SNAT rules.
+	// 2.设置 masqueradeMark，默认为 0x00004000/0x00004000
+	// 用来标记 k8s 管理的报文，masqueradeBit 默认为 14
+	// 标记 0x4000 的报文（即 POD 发出的报文)，在离开 Node 的时候需要进行 SNAT 转换
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x", masqueradeValue)
 	klog.V(2).InfoS("Using iptables mark for masquerade", "ipFamily", ipt.Protocol(), "mark", masqueradeMark)
 
 	serviceHealthServer := healthcheck.NewServiceHealthServer(hostname, recorder, nodePortAddresses, healthzServer)
 
+	// 3.初始化 proxier
 	proxier := &Proxier{
 		svcPortMap:               make(proxy.ServicePortMap),
 		serviceChanges:           proxy.NewServiceChangeTracker(newServiceInfo, ipFamily, recorder, nil),
@@ -302,6 +307,8 @@ func NewProxier(ipFamily v1.IPFamily,
 	// We pass syncPeriod to ipt.Monitor, which will call us only if it needs to.
 	// We need to pass *some* maxInterval to NewBoundedFrequencyRunner anyway though.
 	// time.Hour is arbitrary.
+	// 4.初始化 syncRunner，BoundedFrequencyRunner 是一个定时执行器，会定时执行
+	// proxier.syncProxyRules 方法,syncProxyRules 是每个 proxier 实际刷新iptables 规则的方法
 	proxier.syncRunner = async.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, time.Hour, burstSyncs)
 
 	go ipt.Monitor(kubeProxyCanaryChain, []utiliptables.Table{utiliptables.TableMangle, utiliptables.TableNAT, utiliptables.TableFilter},
@@ -759,6 +766,12 @@ func (proxier *Proxier) forceSyncProxyRules() {
 // This is where all of the iptables-save/restore calls happen.
 // The only other iptables rules are those that are setup in iptablesInit()
 // This assumes proxier.mu is NOT held
+/*
+syncProxyRules() 是每个 proxier 的核心方法，
+启动 informer cache 同步完成后会直接调用 proxier.syncProxyRules() 刷新iptables 规则，
+之后如果 informer watch 到相关对象的变化后会调用 BoundedFrequencyRunner 的 tryRun()来刷新iptables 规则，
+定时器每 30s 会执行一次iptables 规则的刷新。
+*/
 func (proxier *Proxier) syncProxyRules() {
 	proxier.mu.Lock()
 	defer proxier.mu.Unlock()

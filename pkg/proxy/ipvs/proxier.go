@@ -333,6 +333,7 @@ func NewProxier(ipFamily v1.IPFamily,
 	// Proxy needs br_netfilter and bridge-nf-call-iptables=1 when containers
 	// are connected to a Linux bridge (but not SDN bridges).  Until most
 	// plugins handle this, log when config is missing
+	// 1.设定内核参数
 	if val, err := sysctl.GetSysctl(sysctlBridgeCallIPTables); err == nil && val != 1 {
 		klog.InfoS("Missing br-netfilter module or unset sysctl br-nf-call-iptables, proxy may not work as intended")
 	}
@@ -399,11 +400,13 @@ func NewProxier(ipFamily v1.IPFamily,
 	}
 
 	// Generate the masquerade mark to use for SNAT rules.
+	// 2.生成 masquerade 标记
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x", masqueradeValue)
 
 	klog.V(2).InfoS("Record nodeIP and family", "nodeIP", nodeIP, "family", ipFamily)
 
+	// 3.设置默认调度算法 rr
 	if len(scheduler) == 0 {
 		klog.InfoS("IPVS scheduler not specified, use rr by default")
 		scheduler = defaultScheduler
@@ -416,6 +419,7 @@ func NewProxier(ipFamily v1.IPFamily,
 	// excludeCIDRs has been validated before, here we just parse it to IPNet list
 	parsedExcludeCIDRs, _ := netutils.ParseCIDRs(excludeCIDRs)
 
+	// 4.初始化 proxier
 	proxier := &Proxier{
 		ipFamily:              ipFamily,
 		svcPortMap:            make(proxy.ServicePortMap),
@@ -451,13 +455,16 @@ func NewProxier(ipFamily v1.IPFamily,
 		gracefuldeleteManager: NewGracefulTerminationManager(ipvs),
 	}
 	// initialize ipsetList with all sets we needed
+	// 5.初始化 ipset 规则
 	proxier.ipsetList = make(map[string]*IPSet)
 	for _, is := range ipsetInfo {
 		proxier.ipsetList[is.name] = NewIPSet(ipset, is.name, is.setType, (ipFamily == v1.IPv6Protocol), is.comment)
 	}
 	burstSyncs := 2
 	klog.V(2).InfoS("ipvs sync params", "ipFamily", ipt.Protocol(), "minSyncPeriod", minSyncPeriod, "syncPeriod", syncPeriod, "burstSyncs", burstSyncs)
+	// 6.初始化 syncRunner
 	proxier.syncRunner = async.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, syncPeriod, burstSyncs)
+	// 7.启动 gracefuldeleteManager
 	proxier.gracefuldeleteManager.Run()
 	return proxier, nil
 }
@@ -786,6 +793,7 @@ func (proxier *Proxier) isInitialized() bool {
 }
 
 // OnServiceAdd is called whenever creation of new service object is observed.
+// 1.service 相关的方法
 func (proxier *Proxier) OnServiceAdd(service *v1.Service) {
 	proxier.OnServiceUpdate(nil, service)
 }
@@ -815,6 +823,7 @@ func (proxier *Proxier) OnServiceSynced() {
 
 // OnEndpointSliceAdd is called whenever creation of a new endpoint slice object
 // is observed.
+// 3.endpointSlice 相关的方法
 func (proxier *Proxier) OnEndpointSliceAdd(endpointSlice *discovery.EndpointSlice) {
 	if proxier.endpointsChanges.EndpointSliceUpdate(endpointSlice, false) && proxier.isInitialized() {
 		proxier.Sync()

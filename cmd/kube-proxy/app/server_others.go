@@ -129,10 +129,12 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 	var proxier proxy.Provider
 	var err error
 
+	// 1.关键依赖工具 iptables/ipvs/ipset/dbus
 	primaryProtocol := utiliptables.ProtocolIPv4
 	if s.PrimaryIPFamily == v1.IPv6Protocol {
 		primaryProtocol = utiliptables.ProtocolIPv6
 	}
+	// 2.执行 linux 命令行的工具
 	execer := exec.New()
 	iptInterface := utiliptables.New(execer, primaryProtocol)
 
@@ -140,6 +142,7 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 
 	// Create iptables handlers for both families, one is already created
 	// Always ordered as IPv4, IPv6
+	// 3.初始化 iptables/ipvs/ipset/dbus 对象
 	if primaryProtocol == utiliptables.ProtocolIPv4 {
 		ipt[0] = iptInterface
 		ipt[1] = utiliptables.New(execer, utiliptables.ProtocolIPv6)
@@ -160,6 +163,7 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 			}
 
 			// TODO this has side effects that should only happen when Run() is invoked.
+			// 9.初始化 iptables 模式的 proxier
 			proxier, err = iptables.NewDualStackProxier(
 				ipt,
 				utilsysctl.New(),
@@ -216,6 +220,7 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 		}
 
 		klog.InfoS("Using ipvs Proxier")
+		// 10.判断是够启用了 ipv6 双栈
 		if dualStack {
 			// Always ordered to match []ipt
 			var localDetectors [2]proxyutiliptables.LocalTrafficDetector
@@ -224,6 +229,7 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 				return nil, fmt.Errorf("unable to create proxier: %v", err)
 			}
 
+			// 11.初始化 ipvs 模式的 proxier
 			proxier, err = ipvs.NewDualStackProxier(
 				ipt,
 				ipvsInterface,

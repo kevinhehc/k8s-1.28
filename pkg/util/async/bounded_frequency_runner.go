@@ -152,9 +152,15 @@ var _ timer = &realTimer{}
 //
 // The maxInterval must be greater than or equal to the minInterval,  If the
 // caller passes a maxInterval less than minInterval, this function will panic.
+/*
+参数 minInterval和 maxInterval 分别对应 proxier 中的 minSyncPeriod 和 syncPeriod，
+两者的默认值分别为 0s 和 30s，其值可以使用 --iptables-min-sync-period 和 --iptables-sync-period 启动参数来指定
+*/
 func NewBoundedFrequencyRunner(name string, fn func(), minInterval, maxInterval time.Duration, burstRuns int) *BoundedFrequencyRunner {
 	timer := &realTimer{timer: time.NewTimer(0)} // will tick immediately
-	<-timer.C()                                  // consume the first tick
+	// 执行定时器
+	<-timer.C() // consume the first tick
+	// 调用 construct() 函数
 	return construct(name, fn, minInterval, maxInterval, burstRuns, timer)
 }
 
@@ -169,17 +175,19 @@ func construct(name string, fn func(), minInterval, maxInterval time.Duration, b
 
 	bfr := &BoundedFrequencyRunner{
 		name:        name,
-		fn:          fn,
+		fn:          fn, // 被调用的函数，proxier.syncProxyRules
 		minInterval: minInterval,
 		maxInterval: maxInterval,
 		run:         make(chan struct{}, 1),
 		retry:       make(chan struct{}, 1),
 		timer:       timer,
 	}
+	// 由于默认的 minInterval = 0，此处使用 nullLimiter
 	if minInterval == 0 {
 		bfr.limiter = nullLimiter{}
 	} else {
 		// allow burst updates in short succession
+		// 采用“令牌桶”算法实现流控机制
 		qps := float32(time.Second) / float32(minInterval)
 		bfr.limiter = flowcontrol.NewTokenBucketRateLimiterWithClock(qps, burstRuns, timer)
 	}
@@ -197,9 +205,9 @@ func (bfr *BoundedFrequencyRunner) Loop(stop <-chan struct{}) {
 			bfr.stop()
 			klog.V(3).Infof("%s Loop stopping", bfr.name)
 			return
-		case <-bfr.timer.C():
+		case <-bfr.timer.C(): // 定时器
 			bfr.tryRun()
-		case <-bfr.run:
+		case <-bfr.run: // 接收 channel
 			bfr.tryRun()
 		case <-bfr.retry:
 			bfr.doRetry()
@@ -218,7 +226,7 @@ func (bfr *BoundedFrequencyRunner) Run() {
 	// putting element to it, we simply skip it if there is already an element
 	// in it.
 	select {
-	case bfr.run <- struct{}{}:
+	case bfr.run <- struct{}{}: // 向 channel 发送信号
 	default:
 	}
 }
@@ -289,6 +297,7 @@ func (bfr *BoundedFrequencyRunner) tryRun() {
 
 	if bfr.limiter.TryAccept() {
 		// We're allowed to run the function right now.
+		// 执行 fn() 即 syncProxyRules() 刷新iptables 规则
 		bfr.fn()
 		bfr.lastRun = bfr.timer.Now()
 		bfr.timer.Stop()

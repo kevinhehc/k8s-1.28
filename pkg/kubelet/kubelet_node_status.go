@@ -519,6 +519,7 @@ func (kl *Kubelet) syncNodeStatus() {
 	if kl.kubeClient == nil || kl.heartbeatClient == nil {
 		return
 	}
+	// 是否为注册节点
 	if kl.registerNode {
 		// This will exit immediately if it doesn't need to do anything.
 		kl.registerWithAPIServer()
@@ -530,6 +531,12 @@ func (kl *Kubelet) syncNodeStatus() {
 
 // updateNodeStatus updates node status to master with retries if there is any
 // change or enough time passed from the last sync.
+/*
+syncNodeStatus 调用 updateNodeStatus， 然后又调用 tryUpdateNodeStatus 来进行上报操作，而最终调用的是 setNodeStatus。
+这里还进行了同步状态判断，如果是注册节点，则执行 registerWithAPIServer，否则，执行 updateNodeStatus。
+
+updateNodeStatus 主要是调用 tryUpdateNodeStatus 进行后续的操作，该函数中定义了状态上报重试的次数，nodeStatusUpdateRetry 默认定义为 5 次。
+*/
 func (kl *Kubelet) updateNodeStatus(ctx context.Context) error {
 	klog.V(5).InfoS("Updating node status")
 	for i := 0; i < nodeStatusUpdateRetry; i++ {
@@ -558,6 +565,7 @@ func (kl *Kubelet) tryUpdateNodeStatus(ctx context.Context, tryNumber int) error
 	if tryNumber == 0 {
 		util.FromApiserverCache(&opts)
 	}
+	// 获取 node 信息
 	originalNode, err := kl.heartbeatClient.CoreV1().Nodes().Get(ctx, string(kl.nodeName), opts)
 	if err != nil {
 		return fmt.Errorf("error getting node %q: %v", kl.nodeName, err)
@@ -566,9 +574,11 @@ func (kl *Kubelet) tryUpdateNodeStatus(ctx context.Context, tryNumber int) error
 		return fmt.Errorf("nil %q node object", kl.nodeName)
 	}
 
+	// 设置 node 状态
 	node, changed := kl.updateNode(ctx, originalNode)
 	shouldPatchNodeStatus := changed || kl.clock.Since(kl.lastStatusReportTime) >= kl.nodeStatusReportFrequency
 
+	// 更新 node 信息到 master
 	if !shouldPatchNodeStatus {
 		kl.markVolumesFromNode(node)
 		return nil
@@ -716,6 +726,19 @@ func (kl *Kubelet) getLastObservedNodeAddresses() []v1.NodeAddress {
 
 // defaultNodeStatusFuncs is a factory that generates the default set of
 // setNodeStatus funcs
+// defaultNodeStatusFuncs 是生成状态的函数，通过获取 node 的所有状态指标后使用工厂函数生成状态
+/*
+defaultNodeStatusFuncs 可以看到 node 上报的所有信息，主要有
+MemoryPressureCondition、
+DiskPressureCondition、
+PIDPressureCondition、
+ReadyCondition 等。
+每一种 nodestatus 都返回一个 setters，所有 setters 的定义在 pkg/kubelet/nodestatus/setters.go 文件中。
+
+对于二次开发而言，如果我们需要 APIServer 掌握更多的 Node 信息，可以在此处添加自定义函数，例如，上报磁盘信息等。
+
+tryUpdateNodeStatus 中最后调用 PatchNodeStatus 上报 node 的状态到 master。
+*/
 func (kl *Kubelet) defaultNodeStatusFuncs() []func(context.Context, *v1.Node) error {
 	// if cloud is not nil, we expect the cloud resource sync manager to exist
 	var nodeAddressesFunc func() ([]v1.NodeAddress, error)

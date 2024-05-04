@@ -43,6 +43,16 @@ type EventRecorder interface {
 }
 
 // EventBroadcaster knows how to receive events and send them to any EventSink, watcher, or log.
+/*
+EventBroadcaster 是个接口类型，该接口有以下四个方法：
+
+StartEventWatcher() ： EventBroadcaster 中的核心方法，接收各模块产生的 events，参数为一个处理 events 的函数，
+	用户可以使用 StartEventWatcher() 接收 events 然后使用自定义的 handle 进行处理
+
+StartRecordingToSink() ： 调用 StartEventWatcher() 接收 events，并将收到的 events 发送到 apiserver
+StartLogging() ：也是调用 StartEventWatcher() 接收 events，然后保存 events 到日志
+NewRecorder() ：会创建一个指定 EventSource 的 EventRecorder，EventSource 指明了哪个节点的哪个组件
+*/
 type EventBroadcaster interface {
 	// StartRecordingToSink starts sending events received from the specified eventBroadcaster.
 	StartRecordingToSink(stopCh <-chan struct{})

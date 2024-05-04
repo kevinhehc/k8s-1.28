@@ -176,6 +176,7 @@ func (g *GenericPLEG) Healthy() (bool, error) {
 	return true, nil
 }
 
+// 生成事件
 func generateEvents(podID types.UID, cid string, oldState, newState plegContainerState) []*PodLifecycleEvent {
 	if newState == oldState {
 		return nil

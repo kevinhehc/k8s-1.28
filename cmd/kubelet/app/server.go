@@ -508,11 +508,15 @@ func makeEventRecorder(kubeDeps *kubelet.Dependencies, nodeName types.NodeName) 
 	if kubeDeps.Recorder != nil {
 		return
 	}
+	// 初始化 EventBroadcaster
 	eventBroadcaster := record.NewBroadcaster()
+	// 初始化 EventRecorder
 	kubeDeps.Recorder = eventBroadcaster.NewRecorder(legacyscheme.Scheme, v1.EventSource{Component: componentKubelet, Host: string(nodeName)})
+	// 记录 events 到本地日志
 	eventBroadcaster.StartStructuredLogging(3)
 	if kubeDeps.EventClient != nil {
 		klog.V(4).InfoS("Sending events to api server")
+		// 上报 events 到 apiserver
 		eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeDeps.EventClient.Events("")})
 	} else {
 		klog.InfoS("No api server defined - no events will be sent to API server")

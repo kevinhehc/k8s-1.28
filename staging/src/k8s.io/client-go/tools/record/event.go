@@ -342,6 +342,7 @@ type recorderImpl struct {
 	clock clock.PassiveClock
 }
 
+// 生成事件
 func (recorder *recorderImpl) generateEvent(object runtime.Object, annotations map[string]string, eventtype, reason, message string) {
 	ref, err := ref.GetReference(recorder.scheme, object)
 	if err != nil {

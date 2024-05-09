@@ -113,6 +113,7 @@ func New(
 	recorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "service-controller"})
 
 	registerMetrics()
+	// 初始化serviceController
 	s := &Controller{
 		cloud:            cloud,
 		kubeClient:       kubeClient,
@@ -127,6 +128,8 @@ func New(
 		lastSyncedNodes:  []*v1.Node{},
 	}
 
+	// AddEventHandlerWithResyncPeriod包装成listener，定义对象处理的回调函数，关注service资源的增删改操作，
+	// 这里增删直接进入队列，而改操作经过needUpdate函数判定是否将更改后的service以namespace/name的字符串形式加入队列
 	serviceInformer.Informer().AddEventHandlerWithResyncPeriod(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(cur interface{}) {
@@ -302,6 +305,11 @@ func (c *Controller) processNextServiceItem(ctx context.Context) bool {
 	return true
 }
 
+// 所有初始化操作完成后，将进入init函数，需要提醒的是，如果集群未设置cloud-provider或设置不当等相关参数，service将返回如下的错误，
+// 而service controller并不会进入到实际的工作，
+// 最后提示Failed to start service controller: WARNING: no cloud provider provided,
+// services of type LoadBalancer will fail或 Failed to start service controller:
+// the cloud provider does not support external load balancers。
 func (c *Controller) init() error {
 	if c.cloud == nil {
 		return fmt.Errorf("WARNING: no cloud provider provided, services of type LoadBalancer will fail")
@@ -318,6 +326,8 @@ func (c *Controller) init() error {
 
 // processServiceCreateOrUpdate operates loadbalancers for the incoming service accordingly.
 // Returns an error if processing the service update failed.
+// 1、如果cachedService的state不为空，如果缓存的service的uid与获取的service的uid不等，
+// 2、不一致就调用processLoadBalancerDelete函数处理缓存的service，对其收尾工作。出错返回延迟重试时间，并将key重新插入queue。
 func (c *Controller) processServiceCreateOrUpdate(ctx context.Context, service *v1.Service, key string) error {
 	// TODO(@MrHohn): Remove the cache once we get rid of the non-finalizer deletion
 	// path. Ref https://github.com/kubernetes/enhancements/issues/980.
@@ -533,6 +543,23 @@ func needsCleanup(service *v1.Service) bool {
 }
 
 // needsUpdate checks if load balancer needs to be updated due to change in attributes.
+// needsUpdate函数的判定逻辑如下(设定更改前的service为旧service，更改后的service为新service)：
+// 需要入队的情况，由上往下符合即入队返回：
+//
+//	1、旧service的.spec.type为LoadBalancer但新service不是；
+//	2、新service的.spec.type为LoadBalancer且新旧service的loadBalancerSourceRanges不等；
+//	3、新旧service的lb端口或.spec. sessionAffinity不等；
+//	4、新旧service的.spec. loadBalancerIP不等；
+//	5、新旧service的.spec. externalIPs的后端接受流量的节点数不一致(包括长度和节点ip)；
+//	6、新旧service的注解不一致，即. metadata. Annotations值不一致；
+//	7、新旧service的. metadata.uid值不等；
+//	8、新旧service的分流策略不一致，即.spec.externalTrafficPolicy不等(Local和Cluster模式)；
+//	9、新旧service的健康检测端口不一致，即.spec. healthCheckNodePort不等(只作用于.spec.type为LoadBalancer并且.spec.externalTrafficPolicy为Local模式)；
+//
+// 不需要入队的情况：
+//
+//	1、不符合上述入队的情况；
+//	2、旧service和新service的.spec.type均不为LoadBalancer；
 func (c *Controller) needsUpdate(oldService *v1.Service, newService *v1.Service) bool {
 	if !wantsLoadBalancer(oldService) && !wantsLoadBalancer(newService) {
 		return false
@@ -833,6 +860,15 @@ func loadBalancerIPsAreEqual(oldService, newService *v1.Service) bool {
 // syncService will sync the Service with the given key if it has had its expectations fulfilled,
 // meaning it did not expect to see any more of its pods created or deleted. This function is not meant to be
 // invoked concurrently with the same key.
+
+// 将从queue中获取到的key，经过SplitMetaNamespaceKey函数得到service的namespace和name，然后调用serviceLister的方法获取service。进行以下逻辑：
+// 1、如果该service已经不存在了，表明该service已经被删除，则将进行service的收尾工作，通过serviceContrller的cache变量获取该service，
+//		如果不存在，则返回；否则就调用processLoadBalancerDelete函数继续判断该service不是loadBalancerIP类型，则直接返回，
+//		否则调用serviceContrller中的balancer变量的EnsureLoadBalancerDeleted方法进行balance的删除，
+//		如果删除错误，返回错误和下次延迟重试时间，serviceContrller会根据这个延迟重试时间将该service加入到queue等待下一次的处理。
+//		所有操作无误后清理cache变量的service缓存，并将重试时间设置为0，这时表示该操作已经正确完成。
+// 2、如果是其他未知错误，则将该key继续加入queue，等待下一次处理。
+
 func (c *Controller) syncService(ctx context.Context, key string) error {
 	startTime := time.Now()
 	defer func() {

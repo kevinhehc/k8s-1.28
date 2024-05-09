@@ -2277,27 +2277,50 @@ type ExecAction struct {
 type Probe struct {
 	// The action taken to determine the health of a container
 	ProbeHandler `json:",inline" protobuf:"bytes,1,opt,name=handler"`
+
 	// Number of seconds after the container has started before liveness probes are initiated.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
+
+	// 容器启动后要等待多少秒后才启动启动、存活和就绪探针。如果定义了启动探针，则存活探针和就绪探针的延迟将在启动探针已成功之后才开始计算。
+	// 如果 periodSeconds 的值大于 initialDelaySeconds，则 initialDelaySeconds 将被忽略。默认是 0 秒，最小值是 0。
 	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty" protobuf:"varint,2,opt,name=initialDelaySeconds"`
+
 	// Number of seconds after which the probe times out.
 	// Defaults to 1 second. Minimum value is 1.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
+
+	// 探测的超时后等待多少秒。默认值是 1 秒。最小值是 1。
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty" protobuf:"varint,3,opt,name=timeoutSeconds"`
+
 	// How often (in seconds) to perform the probe.
 	// Default to 10 seconds. Minimum value is 1.
 	// +optional
+
+	// 执行探测的时间间隔（单位是秒）。默认是 10 秒。最小值是 1。
 	PeriodSeconds int32 `json:"periodSeconds,omitempty" protobuf:"varint,4,opt,name=periodSeconds"`
+
 	// Minimum consecutive successes for the probe to be considered successful after having failed.
 	// Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1.
 	// +optional
+
+	// 探针在失败后，被视为成功的最小连续成功数。默认值是 1。存活和启动探测的这个值必须是 1。最小值是 1。
 	SuccessThreshold int32 `json:"successThreshold,omitempty" protobuf:"varint,5,opt,name=successThreshold"`
+
 	// Minimum consecutive failures for the probe to be considered failed after having succeeded.
 	// Defaults to 3. Minimum value is 1.
 	// +optional
+
+	// 探针连续失败了 failureThreshold 次之后，
+	// Kubernetes 认为总体上检查已失败：容器状态未就绪、不健康、不活跃。
+	// 对于启动探针或存活探针而言，如果至少有 failureThreshold 个探针已失败，
+	// Kubernetes 会将容器视为不健康并为这个特定的容器触发重启操作。
+	// Kubelet 遵循该容器的 terminationGracePeriodSeconds 设置。
+	// 对于失败的就绪探针，Kubelet 继续运行检查失败的容器，并继续运行更多探针；
+	// 因为检查失败，Kubelet 将 Pod 的 Ready 状况设置为 false。
 	FailureThreshold int32 `json:"failureThreshold,omitempty" protobuf:"varint,6,opt,name=failureThreshold"`
+
 	// Optional duration in seconds the pod needs to terminate gracefully upon probe failure.
 	// The grace period is the duration in seconds after the processes running in the pod are sent
 	// a termination signal and the time when the processes are forcibly halted with a kill signal.
@@ -2309,6 +2332,10 @@ type Probe struct {
 	// This is a beta field and requires enabling ProbeTerminationGracePeriod feature gate.
 	// Minimum value is 1. spec.terminationGracePeriodSeconds is used if unset.
 	// +optional
+
+	// 为 Kubelet 配置从为失败的容器触发终止操作到强制容器运行时停止该容器之前等待的宽限时长。
+	//默认值是继承 Pod 级别的 terminationGracePeriodSeconds 值（如果不设置则为 30 秒），最小值为 1。
+	//更多细节请参见探针级别 terminationGracePeriodSeconds。
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty" protobuf:"varint,7,opt,name=terminationGracePeriodSeconds"`
 }
 
@@ -2540,12 +2567,14 @@ type Container struct {
 	// Cannot be updated.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
+	// 存活探针，即探测容器是否运行、存活
 	LivenessProbe *Probe `json:"livenessProbe,omitempty" protobuf:"bytes,10,opt,name=livenessProbe"`
 	// Periodic probe of container service readiness.
 	// Container will be removed from service endpoints if the probe fails.
 	// Cannot be updated.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
+	// 就绪探针，探测容器是否就绪，是否能够正常提供服务了；
 	ReadinessProbe *Probe `json:"readinessProbe,omitempty" protobuf:"bytes,11,opt,name=readinessProbe"`
 	// StartupProbe indicates that the Pod has successfully initialized.
 	// If specified, no other probes are executed until this completes successfully.
@@ -2555,6 +2584,7 @@ type Container struct {
 	// This cannot be updated.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
+	// 启动探针，探测容器是否启动。
 	StartupProbe *Probe `json:"startupProbe,omitempty" protobuf:"bytes,22,opt,name=startupProbe"`
 	// Actions that the management system should take in response to container lifecycle events.
 	// Cannot be updated.
@@ -2619,16 +2649,20 @@ type Container struct {
 type ProbeHandler struct {
 	// Exec specifies the action to take.
 	// +optional
+	// exec 在容器内执行指定命令。如果命令退出时返回码为 0 则认为诊断成功。
 	Exec *ExecAction `json:"exec,omitempty" protobuf:"bytes,1,opt,name=exec"`
 	// HTTPGet specifies the http request to perform.
 	// +optional
+	// httpGet 对容器的 IP 地址上指定端口和路径执行 HTTP GET 请求。如果响应的状态码大于等于 200 且小于 400，则诊断被认为是成功的。
 	HTTPGet *HTTPGetAction `json:"httpGet,omitempty" protobuf:"bytes,2,opt,name=httpGet"`
 	// TCPSocket specifies an action involving a TCP port.
 	// +optional
+	// 对容器的 IP 地址上的指定端口执行 TCP 检查。如果端口打开，则诊断被认为是成功的。如果远程系统（容器）在打开连接后立即将其关闭，这算作是健康的。
 	TCPSocket *TCPSocketAction `json:"tcpSocket,omitempty" protobuf:"bytes,3,opt,name=tcpSocket"`
 
 	// GRPC specifies an action involving a GRPC port.
 	// +optional
+	// 使用 gRPC 执行一个远程过程调用。目标应该实现  gRPC 健康检查。如果响应的状态是 "SERVING"，则认为诊断成功。
 	GRPC *GRPCAction `json:"grpc,omitempty" protobuf:"bytes,4,opt,name=grpc"`
 }
 

@@ -37,6 +37,7 @@ type shortcutExpander struct {
 var _ meta.ResettableRESTMapper = shortcutExpander{}
 
 // NewShortcutExpander wraps a restmapper in a layer that expands shortcuts found via discovery
+// 可以用于Kubernetes资源的RESTMapper。 把userResources、mapper、discoveryClient封装成一个ShortcutExpander结构，可以理解为就是一个简单的封装
 func NewShortcutExpander(delegate meta.RESTMapper, client discovery.DiscoveryInterface) meta.RESTMapper {
 	return shortcutExpander{RESTMapper: delegate, discoveryClient: client}
 }

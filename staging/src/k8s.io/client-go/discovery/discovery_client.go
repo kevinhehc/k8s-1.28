@@ -71,10 +71,11 @@ const (
 // DiscoveryInterface holds the methods that discover server-supported API groups,
 // versions and resources.
 type DiscoveryInterface interface {
+	// RESTClient()返回一个restclient.Interface，用于与API服务器进行通信。
 	RESTClient() restclient.Interface
-	ServerGroupsInterface
-	ServerResourcesInterface
-	ServerVersionInterface
+	ServerGroupsInterface    //获取 API server支持的gropus
+	ServerResourcesInterface //获取 API server支持的resource
+	ServerVersionInterface   //获取 API server支持的version
 	OpenAPISchemaInterface
 	OpenAPIV3SchemaInterface
 	// Returns copy of current discovery client that will only
@@ -157,6 +158,7 @@ type OpenAPIV3SchemaInterface interface {
 
 // DiscoveryClient implements the functions that discover server-supported API groups,
 // versions and resources.
+// 实现了发现server-supported API groups, versions and resources 的方法
 type DiscoveryClient struct {
 	restClient restclient.Interface
 
@@ -730,11 +732,18 @@ func setDiscoveryDefaults(config *restclient.Config) error {
 // can be used to discover supported resources in the API server.
 // NewDiscoveryClientForConfig is equivalent to NewDiscoveryClientForConfigAndClient(c, httpClient),
 // where httpClient was generated with rest.HTTPClientFor(c).
+/*
+	译：NewDiscoveryClientForConfig基于指定的配置创建一个新的DiscoveryClient。
+		该DiscoveryClient可用于发现API server中支持的resources。
+*/
 func NewDiscoveryClientForConfig(c *restclient.Config) (*DiscoveryClient, error) {
 	config := *c
+	//设置默认参数
 	if err := setDiscoveryDefaults(&config); err != nil {
 		return nil, err
 	}
+	// 返回一个满足client Config要求的RESTClient。
+	//		由此方法创建的RESTClient是通用的 - 它希望可以按照Kubernetes约定的API进行操作，但可能不是Kubernetes API。
 	httpClient, err := restclient.HTTPClientFor(&config)
 	if err != nil {
 		return nil, err

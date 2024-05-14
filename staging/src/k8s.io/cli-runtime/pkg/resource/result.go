@@ -110,6 +110,10 @@ func (r *Result) IntoSingleItemImplied(b *bool) *Result {
 // Infos returns an array of all of the resource infos retrieved via traversal.
 // Will attempt to traverse the entire set of visitors only once, and will return
 // a cached list on subsequent calls.
+/*
+	译：func (r *Result) Infos()以数组的形式返回所有的resource infos。
+		尝试遍历整个visitors一次，然后在后续的调用中将返回一个cached list。
+*/
 func (r *Result) Infos() ([]*Info, error) {
 	if r.err != nil {
 		return nil, r.err
@@ -123,6 +127,10 @@ func (r *Result) Infos() ([]*Info, error) {
 		if err != nil {
 			return err
 		}
+		/*
+			一个个info添加到infos中
+			下面会展示在这个地方输出的info信息
+		*/
 		infos = append(infos, info)
 		return nil
 	})

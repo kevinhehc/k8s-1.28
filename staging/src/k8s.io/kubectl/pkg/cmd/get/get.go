@@ -155,6 +155,7 @@ func NewGetOptions(parent string, streams genericiooptions.IOStreams) *GetOption
 
 // NewCmdGet creates a command object for the generic "get" action, which
 // retrieves one or more resources from a server.
+// 从server端获取数据
 func NewCmdGet(parent string, f cmdutil.Factory, streams genericiooptions.IOStreams) *cobra.Command {
 	o := NewGetOptions(parent, streams)
 
@@ -175,6 +176,7 @@ func NewCmdGet(parent string, f cmdutil.Factory, streams genericiooptions.IOStre
 
 	o.PrintFlags.AddFlags(cmd)
 
+	// 通过调用package cmdutil 中的函数来给一个cmd添加flag，主要用于一些公共flag或者直接添加flag
 	cmd.Flags().StringVar(&o.Raw, "raw", o.Raw, "Raw URI to request from the server.  Uses the transport specified by the kubeconfig file.")
 	cmd.Flags().BoolVarP(&o.Watch, "watch", "w", o.Watch, "After listing/getting the requested object, watch for changes.")
 	cmd.Flags().BoolVar(&o.WatchOnly, "watch-only", o.WatchOnly, "Watch for changes to the requested object(s), without listing/getting first.")
@@ -436,8 +438,11 @@ func (o *GetOptions) transformRequests(req *rest.Request) {
 
 // Run performs the get operation.
 // TODO: remove the need to pass these arguments, like other commands.
+//
+//	get命令真正执行的实体
 func (o *GetOptions) Run(f cmdutil.Factory, args []string) error {
 	if len(o.Raw) > 0 {
+		// Factory提供了一些抽象，允许Kubectl命令跨多种类型的资源和不同的API集进行扩展。
 		restClient, err := f.RESTClient()
 		if err != nil {
 			return err

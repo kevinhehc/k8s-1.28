@@ -26,6 +26,7 @@ import (
 )
 
 func main() {
+	// kubectl的入口
 	command := cmd.NewDefaultKubectlCommand()
 	if err := cli.RunNoErrOutput(command); err != nil {
 		// Pretty-print the error and exit with an error.

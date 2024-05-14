@@ -58,7 +58,7 @@ func NewCmdRollout(f cmdutil.Factory, streams genericiooptions.IOStreams) *cobra
 	cmd := &cobra.Command{
 		Use:                   "rollout SUBCOMMAND",
 		DisableFlagsInUseLine: true,
-		Short:                 i18n.T("Manage the rollout of a resource"),
+		Short:                 i18n.T("Manage the rollout of a resource"), //逐步发布
 		Long:                  rolloutLong,
 		Example:               rolloutExample,
 		Run:                   cmdutil.DefaultSubCommandRun(streams.Out),

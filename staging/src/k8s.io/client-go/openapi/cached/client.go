@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/openapi"
 )
 
+// 缓存客户端
 type client struct {
 	delegate openapi.Client
 

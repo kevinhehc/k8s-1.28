@@ -35,6 +35,7 @@ type APIGroupResources struct {
 	Group metav1.APIGroup
 	// A mapping of version string to a slice of APIResources for
 	// that version.
+	// version string ==>该version的APIResources
 	VersionedResources map[string][]metav1.APIResource
 }
 
@@ -144,6 +145,7 @@ func NewDiscoveryRESTMapper(groupResources []*APIGroupResources) meta.RESTMapper
 
 // GetAPIGroupResources uses the provided discovery client to gather
 // discovery information and populate a slice of APIGroupResources.
+// 译：GetAPIGroupResources使用入参discoveryClient，收集discovery information并填充一个APIGroupResources切片。
 func GetAPIGroupResources(cl discovery.DiscoveryInterface) ([]*APIGroupResources, error) {
 	gs, rs, err := cl.ServerGroupsAndResources()
 	if rs == nil || gs == nil {
@@ -185,6 +187,10 @@ type DeferredDiscoveryRESTMapper struct {
 // NewDeferredDiscoveryRESTMapper returns a
 // DeferredDiscoveryRESTMapper that will lazily query the provided
 // client for discovery information to do REST mappings.
+/*
+	译：func NewDeferredDiscoveryRESTMapper返回一个DeferredDiscoveryRESTMapper，
+		它将懒惰地查询指定的client（也就是discoveryClient）获取discovery information，用于执行REST映射。
+*/
 func NewDeferredDiscoveryRESTMapper(cl discovery.CachedDiscoveryInterface) *DeferredDiscoveryRESTMapper {
 	return &DeferredDiscoveryRESTMapper{
 		cl: cl,

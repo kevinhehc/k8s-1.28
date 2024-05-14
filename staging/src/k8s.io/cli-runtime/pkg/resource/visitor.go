@@ -61,6 +61,7 @@ type ResourceMapping interface {
 
 // Info contains temporary info to execute a REST call, or show the results
 // of an already completed REST call.
+// 包含执行REST调用的临时信息，或显示已完成的REST调用的结果。
 type Info struct {
 	// Client will only be present if this builder was not local
 	Client RESTClient
@@ -73,6 +74,7 @@ type Info struct {
 
 	// Optional, Source is the filename or URL to template file (.json or .yaml),
 	// or stdin to use to handle the resource
+	// 可选，Source是模板文件（.json或.yaml）的文件名或URL，或用于处理资源的stdin
 	Source string
 	// Optional, this is the most recent value returned by the server if available. It will
 	// typically be in unstructured or internal forms, depending on how the Builder was
@@ -80,11 +82,17 @@ type Info struct {
 	// decide the final form. Use the AsVersioned, AsUnstructured, and AsInternal helpers
 	// to alter the object versions.
 	// If Subresource is specified, this will be the object for the subresource.
+	// 可选，这是服务器返回的最新值（如果可用）
 	Object runtime.Object
 	// Optional, this is the most recent resource version the server knows about for
 	// this type of resource. It may not match the resource version of the object,
 	// but if set it should be equal to or newer than the resource version of the
 	// object (however the server defines resource version).
+	// 译：可选，这是server端知道的此类resource的最新resource version。
+	//			它可能与该object的resource version 不匹配，
+	//			它应该等于或新于object的resource version (但服务器定义资源版本）。
+	//
+	//		简单来说，ResourceVersion的值是etcd中全局最新的Index
 	ResourceVersion string
 	// Optional, if specified, the object is the most recent value of the subresource
 	// returned by the server if available.

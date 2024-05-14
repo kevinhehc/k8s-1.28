@@ -78,6 +78,11 @@ type ClientContentConfig struct {
 // any failure.
 //
 // Most consumers should use client.New() to get a Kubernetes API client.
+/*
+	译：type RESTClient struct 在一组resource paths上强加了常见的Kubernetes API约定。
+		baseURL指向作为一个或多个resources的父级resources的HTTP（HTTPS）路径。
+		server端应该返回一个可解码的API资源对象，或一个api.Status对象，其中包含有关任何故障原因的信息。
+*/
 type RESTClient struct {
 	// base is the root URL for all invocations of the client
 	base *url.URL

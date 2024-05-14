@@ -41,23 +41,30 @@ import (
 
 // CachedDiscoveryClient implements the functions that discovery server-supported API groups,
 // versions and resources.
+// 译：CachedDiscoveryClient的功能是：发现server端支持的API groups，versions and resources
 type CachedDiscoveryClient struct {
 	delegate discovery.DiscoveryInterface
 
 	// cacheDirectory is the directory where discovery docs are held.  It must be unique per host:port combination to work well.
+	// 译：cacheDirectory是discovery docs存储的目录。它必须是唯一的host:port组合。
 	cacheDirectory string
 
 	// ttl is how long the cache should be considered valid
+	// 译：ttl是cache的有效时间
 	ttl time.Duration
 
 	// mutex protects the variables below
+	// 互斥保护
 	mutex sync.Mutex
 
 	// ourFiles are all filenames of cache files created by this process
+	// 译：ourFiles都是由此进程创建的缓存文件的文件名
 	ourFiles map[string]struct{}
 	// invalidated is true if all cache files should be ignored that are not ours (e.g. after Invalidate() was called)
+	// invalidated=true，如果所有缓存文件都应该被忽略
 	invalidated bool
 	// fresh is true if all used cache files were ours
+	// fresh=true，如果所使用的cache files是可以使用的，不需要更新
 	fresh bool
 
 	// caching openapi v3 client which wraps the delegate's client

@@ -387,6 +387,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 
 	groups := templates.CommandGroups{
 		{
+			// 基础命令 开始
 			Message: "Basic Commands (Beginner):",
 			Commands: []*cobra.Command{
 				create.NewCmdCreate(f, o.IOStreams),
@@ -396,6 +397,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 基础命令 中间
 			Message: "Basic Commands (Intermediate):",
 			Commands: []*cobra.Command{
 				explain.NewCmdExplain("kubectl", f, o.IOStreams),
@@ -405,6 +407,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 部署命令
 			Message: "Deploy Commands:",
 			Commands: []*cobra.Command{
 				rollout.NewCmdRollout(f, o.IOStreams),
@@ -413,6 +416,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 集群管理命令
 			Message: "Cluster Management Commands:",
 			Commands: []*cobra.Command{
 				certificates.NewCmdCertificate(f, o.IOStreams),
@@ -425,6 +429,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 检修和调试命令
 			Message: "Troubleshooting and Debugging Commands:",
 			Commands: []*cobra.Command{
 				describe.NewCmdDescribe("kubectl", f, o.IOStreams),
@@ -440,6 +445,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 高级命令
 			Message: "Advanced Commands:",
 			Commands: []*cobra.Command{
 				diff.NewCmdDiff(f, o.IOStreams),
@@ -451,6 +457,7 @@ func NewKubectlCommand(o KubectlOptions) *cobra.Command {
 			},
 		},
 		{
+			// 设置命令
 			Message: "Settings Commands:",
 			Commands: []*cobra.Command{
 				label.NewCmdLabel(f, o.IOStreams),
